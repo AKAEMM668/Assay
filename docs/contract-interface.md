@@ -201,14 +201,49 @@ The check-set binding is a v2 rather than an amendment to v1 deliberately: an
 attestation written under v1 omitted the check set entirely, and re-hashing it
 under a changed v1 format would break every existing attestation.
 
-## Not done yet
+## Trust boundary: the admin key
 
-- **Single admin.** One key can write any attestation. A production deployment
-  wants multisig or a threshold of independent attesters.
+The registry is an attestation store. The *only* on-chain write path is
+`attest(env, asset, severity, flags, evidence_hash)`, and it requires
+`admin.require_auth()`. The admin is set once by `init(admin)` and **cannot be
+rotated or revoked** — no function exists to change it.
+
+### What the key can do
+
+- Write any severity (`0..=4`) for any asset (identified by its SAC address).
+- Write any flags bitset (no validation beyond the confiscation invariant
+  below).
+- Write any 32-byte `evidence_hash`.
+- Overwrite any existing attestation for the same asset. The previous value is
+  emitted in an `AttestationEvent` for audit, but the contract does not prevent
+  the overwrite.
+- Extend the TTL of the written entry to the maximum (currently ~1 year), so
+  the attestation persists until explicitly overwritten.
+
+### What the key cannot do
+
+- **Forge the evidence hash's correspondence to evidence.** The `evidence_hash`
+  is `SHA-256` over a canonical, deterministic rendering of the scanner's
+  evidence bundle. Anyone can re-scan the asset and recompute the hash with
+  `assay attestation -preimage CODE-ISSUER`. If the stored hash does not match
+  the recomputed one, the attestation does not correspond to the evidence it
+  claims.
+- Bypass the severity range check (`severity <= SEVERITY_CRITICAL`).
+- Bypass the confiscation invariant: if `flags & CONFISCATION_MASK != 0` then
+  `severity >= SEVERITY_HIGH` is enforced at write time and re-checked at read
+  time by `is_safe`.
+- Delete an attestation — only overwrite it.
+- Change the admin key itself.
+
+### Open issues that would change this
+
+- **Single admin.** One key holds all write authority. A production deployment
+  wants a multisig or a threshold of independent attesters.
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
-  issuer's flags change. Freshness is entirely the caller's problem, via
+  issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
-- **No TTL extension.** Soroban persistent entries expire if their TTL is not
-  bumped, and nothing bumps these.
+- **No TTL extension automation.** Entries are extended to max TTL on write,
+  but nothing bumps them periodically; an attestation older than the ledger
+  retention window (~1 year) becomes unrecoverable from chain history alone.
 - **Testnet only.** No pubnet deployment exists, and the points above are why
   one would be premature.
