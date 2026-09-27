@@ -313,3 +313,50 @@ fn attest_rejects_unauthorized_caller() {
     // non-admin caller must not be able to write attestations.
     assert!(err.is_err());
 }
+
+/// Re-attestation with identical evidence must move only the timestamp.
+///
+/// This is the property that makes routine re-attestation safe: re-scanning an
+/// asset whose severity, flags and evidence hash have not changed must overwrite
+/// the stored attestation with the same values and a fresh `attested_at`, and
+/// nothing a gate reads may move. It was observed by hand on AQUA and DOGE on
+/// 2026-09-16 (both reproduced their original hashes exactly; only the timestamp
+/// advanced) and is pinned here so a regression names the field that changed.
+#[test]
+fn re_attestation_identical_evidence_moves_only_timestamp() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    client.attest(&asset, &SEVERITY_MEDIUM, &MECH_AUTH_REVOCABLE, &hash(&env));
+
+    let first = client
+        .get_safety(&asset)
+        .expect("first attestation should exist");
+    assert_eq!(
+        first.attested_at, 1_000,
+        "first write carries its ledger time"
+    );
+
+    // Advance the ledger, then re-attest with byte-identical inputs.
+    let later = 1_000 + 86_400;
+    env.ledger().set_timestamp(later);
+    client.attest(&asset, &SEVERITY_MEDIUM, &MECH_AUTH_REVOCABLE, &hash(&env));
+
+    let second = client
+        .get_safety(&asset)
+        .expect("second attestation should exist");
+
+    // Each field is compared on its own so a failure names the one that moved,
+    // rather than reporting that two whole structs differ.
+    assert_eq!(second.severity, first.severity, "severity must not move");
+    assert_eq!(second.flags, first.flags, "flags must not move");
+    assert_eq!(
+        second.evidence_hash, first.evidence_hash,
+        "evidence_hash must not move"
+    );
+    assert_eq!(
+        second.attested_at, later,
+        "attested_at must advance to the re-attestation time"
+    );
+}
