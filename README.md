@@ -68,6 +68,7 @@ carries an explicit, evaluated position on legitimate clawback use. See
 | [docs/eval.md](docs/eval.md) | Labelled trap/legitimate set and current results |
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
+| [docs/differential.md](docs/differential.md) | Independent re-derivation of issuer flags, compared against the scan |
 
 ## Status
 
