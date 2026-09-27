@@ -22,11 +22,58 @@ import (
 	"github.com/use-assay/assay/internal/scan"
 )
 
+const (
+	exitSuccess     = 0
+	exitGeneric     = 1
+	exitUsage       = 2
+	exitMissing     = 3
+	exitUnavailable = 4
+	exitUnknown     = 5
+)
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "assay:", err)
-		os.Exit(1)
+		os.Exit(exitCodeForError(err))
 	}
+}
+
+func exitCodeForError(err error) int {
+	if err == nil {
+		return exitSuccess
+	}
+	s := err.Error()
+	if strings.Contains(s, "unknown command") ||
+		strings.Contains(s, "no command given") ||
+		strings.Contains(s, "takes exactly one asset") ||
+		strings.Contains(s, "invalid asset") ||
+		strings.Contains(s, "expected asset") ||
+		strings.Contains(s, "bad request") ||
+		strings.Contains(s, "parse") ||
+		strings.Contains(s, "flag provided but not defined") ||
+		strings.Contains(s, "invalid value") {
+		return exitUsage
+	}
+	if strings.Contains(s, "not found") ||
+		strings.Contains(s, "no such asset") ||
+		strings.Contains(s, "does not exist") {
+		return exitMissing
+	}
+	if strings.Contains(s, "timeout") ||
+		strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "no route to host") ||
+		strings.Contains(s, "upstream") ||
+		strings.Contains(s, "network") ||
+		strings.Contains(s, "http") ||
+		strings.Contains(s, "exhausted") {
+		return exitUnavailable
+	}
+	if strings.Contains(s, "undetermined") ||
+		strings.Contains(s, "unevaluated") ||
+		strings.Contains(s, "inconsistent") {
+		return exitUnknown
+	}
+	return exitGeneric
 }
 
 func usage() {
@@ -35,7 +82,7 @@ func usage() {
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
-  assay serve [-addr] [-history PATH]
+assay serve [-addr] [-history PATH]
                                   serve the HTTP API and UI
 `)
 }
