@@ -90,9 +90,11 @@ Four things are worth knowing before you rely on any of it:
   assuming someone is keeping the registry current.
   [docs/freshness.md](docs/freshness.md) measures how often flags actually
   change and recommends windows per use class.
-- **This is testnet, not mainnet.** One key can write any attestation, testnet
-  is periodically reset, and Soroban entries expire if their TTL is not
-  extended. Nothing here is ready for money.
+- **This is testnet, not mainnet.** One key can write any attestation, and
+  testnet is periodically reset. The live registry's entries are archived: they
+  are restored on read with their original `attested_at`, and they do not read
+  as missing ([docs/deployment.md](docs/deployment.md#entry-lifetime)). Nothing
+  here is ready for money.
 - **Severity is capability, not prediction.** It says what an issuer *can* do,
   never what they are likely to do. A regulated stablecoin with clawback and a
   scam with clawback score the same, on purpose — see
