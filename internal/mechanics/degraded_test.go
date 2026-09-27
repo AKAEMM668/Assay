@@ -20,17 +20,25 @@ import (
 
 const testIssuer = "GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P"
 
-// subject builds a Subject with no authorization flags and no home_domain, so
-// capability is Clear and reputation is the only axis in play.
+// subject builds a Subject with no authorization flags, so capability is Clear
+// and reputation is the only axis in play. It carries a home_domain and a clean
+// blocked-domain answer by default, so the reputation axis is fully consulted:
+// these tests are about a source that did answer failing, and a subject with no
+// domain would instead be the (separate) "blocklist could not even be asked"
+// case, which check_reputation_scope_test.go covers.
 func subject(mut func(*mechanics.Subject)) *mechanics.Subject {
 	fetched := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
+	const domain = "doge-issuer.test"
 	s := &mechanics.Subject{
 		Asset:  mechanics.Asset{Code: "DOGE", Issuer: testIssuer},
 		Stat:   &horizon.AssetStat{AssetCode: "DOGE", AssetIssuer: testIssuer},
-		Issuer: &horizon.Account{AccountID: testIssuer},
+		Issuer: &horizon.Account{AccountID: testIssuer, HomeDomain: domain},
 
 		DirectoryURL:         "https://api.stellar.expert/explorer/directory/" + testIssuer,
 		DirectoryAttemptedAt: fetched,
+		BlockedURL:           "https://api.stellar.expert/explorer/directory/blocked-domains/" + domain,
+		Blocked:              &stellarexpert.BlockedDomain{Domain: domain, Blocked: false},
+		BlockedFetchedAt:     fetched,
 		BlockedAttemptedAt:   fetched,
 		StatFetchedAt:        fetched,
 		IssuerFetchedAt:      fetched,

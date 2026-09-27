@@ -132,6 +132,14 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 			sub.Blocked = blocked
 			sub.BlockedFetchedAt = time.Now().UTC()
 		}
+	} else {
+		// The blocklist is keyed on a domain, and there is none: the question
+		// cannot be put at all. Record that explicitly rather than leaving the
+		// fields empty, because an empty Blocked with no error reads downstream
+		// as "the lookup ran and found no entry" — and a blocklist hit
+		// escalates severity, so that silently-dropped lookup is a risk this
+		// report would understate.
+		sub.BlockedSkipped = "the issuer advertises no home_domain to key the lookup on"
 	}
 
 	sub.DirectoryURL = s.Expert.DirectoryURL(a.Issuer)

@@ -176,6 +176,17 @@ Consumes StellarExpert's address directory (the data set standardized by
 SEP-0037) and malicious-domain blocklist. A `malicious`/`unsafe` directory tag
 or a blocklist hit escalates to `critical`.
 
+The two sources are keyed differently, and the difference is stated because it
+decides what a hit means. The directory is keyed on the **issuer address**, so
+a `malicious` tag escalates on StellarExpert's own association. The blocklist
+is keyed on a **domain**, and the only domain Assay has is the issuer's
+self-asserted `home_domain`. A blocklist hit therefore escalates either way —
+positive adverse evidence is never suppressed — but when that domain has not
+reciprocally claimed the asset, the finding's reasoning says so, so an
+unverified link is never presented as a confirmed one. See
+[the severity model](severity-model.md#what-a-blocklist-hit-is-keyed-on) for the
+false-positive/false-negative reasoning behind that choice.
+
 Everything it produces is `Evidence{Source, URL, Claim, RetrievedAt}` naming
 StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
@@ -195,6 +206,15 @@ the source was read and had no entry; a 429, a 5xx, or a timeout means it was
 never read. Those produce different reports: an unreachable source is recorded
 as attributed evidence carrying the failure verbatim, the finding is marked
 `undetermined`, and the report names the check on `undetermined_checks`.
+
+A third case is the same gap pointed the other way: an issuer with **no
+`home_domain`** leaves the domain-keyed blocklist with nothing to look up, so
+the question is never put. A missing question is not a clean answer — a
+blocklist hit would escalate — so this too marks the finding `undetermined`,
+with reasoning that says the lookup could not be keyed rather than that it came
+back empty. The scanner records the skip explicitly (`Subject.BlockedSkipped`)
+rather than leaving the fields empty, because an empty result reads as "read
+and found nothing".
 
 Severity is **not** raised to compensate. Capability stays exactly what the
 ledger says, because inventing a level Assay did not measure would be the same
