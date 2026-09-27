@@ -297,6 +297,7 @@ From this change onward the contract extends TTLs itself:
 | --- | --- |
 | `init` | contract instance and code, to the network maximum |
 | `attest` | the attestation entry, plus the instance and code, to the network maximum |
+| `attest_many` | every attestation entry in the batch, plus the instance and code, to the network maximum |
 | `revoke` | the instance and code (the entry is removed, so it has no TTL) |
 | `get_safety`, `is_safe`, `is_safe_masked` | nothing |
 
