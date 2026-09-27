@@ -229,6 +229,18 @@ Then update `CONTRACT_ID` in the [Makefile](../Makefile) and the addresses in
 this file. `init` is single-shot; a second call fails with
 `AlreadyInitialized`.
 
+### ABI changes require a redeploy
+
+Adding an entrypoint changes the contract's interface, so a running instance
+does not gain it on its own — it must be redeployed. `revoke`
+([#86](https://github.com/use-assay/Assay/issues/86)) is such a change: an
+instance deployed before it has no revocation path, so on that instance a wrong
+attestation can only be overwritten.
+
+A redeploy creates a fresh instance with **empty storage**; stored attestations
+are not carried over. Re-attest the live assets against the new contract ID
+after upgrading, following the re-attestation runbook.
+
 Attesting and reading, once deployed:
 
 ```sh

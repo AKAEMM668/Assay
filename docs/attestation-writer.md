@@ -233,10 +233,13 @@ compromised it.
 - Attest **any severity for any asset**, including `clear` for a known scam
   and `high` for an asset it does not like. Nothing on-chain prevents this;
   the contract cannot check an `evidence_hash`, it only stores it.
-- **Overwrite** an existing attestation — `attest` has no revocation and no
-  history ([#86](https://github.com/use-assay/Assay/issues/86),
-  [#92](https://github.com/use-assay/Assay/issues/92)), so a bad write can
-  only be corrected by a newer write, and the overwritten values are gone.
+- **Overwrite or revoke** an existing attestation. `attest` replaces the stored
+  values and `revoke`
+  ([#86](https://github.com/use-assay/Assay/issues/86)) deletes the entry,
+  restoring the never-attested state. There is still no history
+  ([#92](https://github.com/use-assay/Assay/issues/92)), so the superseded
+  values are gone and a revoked claim leaves no on-chain trace — a compromised
+  admin can erase a correct attestation as well as write a wrong one.
 - Attest assets **never scanned**, with an `evidence_hash` of all zeroes.
 - Refuse to write, or stop writing — the fail-open-by-neglect attack. It
   degrades the registry to staleness, which `is_safe`'s `max_age_secs`
@@ -292,8 +295,7 @@ asks for maintainer sign-off on exactly that scope boundary.
 
 ## What this document does not decide
 
-- Revocation ([#86](https://github.com/use-assay/Assay/issues/86)),
-  TTL extension ([#87](https://github.com/use-assay/Assay/issues/87)),
+- TTL extension ([#87](https://github.com/use-assay/Assay/issues/87)),
   multi-attestor ([#88](https://github.com/use-assay/Assay/issues/88)),
   admin rotation ([#89](https://github.com/use-assay/Assay/issues/89)),
   key custody ([#120](https://github.com/use-assay/Assay/issues/120)),

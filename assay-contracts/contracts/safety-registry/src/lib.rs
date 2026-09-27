@@ -132,6 +132,8 @@ pub enum Error {
     /// set but severity is below `SEVERITY_HIGH`. Rejected at write time so a
     /// gate can rely on the invariant at read time.
     InconsistentAttestation = 4,
+    /// `revoke` was called for an asset with no live attestation.
+    NotAttested = 5,
 }
 
 #[contract]
@@ -198,6 +200,45 @@ impl SafetyRegistry {
             attested_at,
         }
         .publish(&env);
+        Ok(())
+    }
+
+    /// Withdraws the attestation for `asset`, restoring the never-attested
+    /// state.
+    ///
+    /// Until now the only remedy for a wrong attestation was to overwrite it,
+    /// which asserts a new claim rather than retracting one. Revocation removes
+    /// the entry, so `get_safety` returns `None` and both gate helpers fail
+    /// closed — the honest answer when a claim turns out not to be supported.
+    ///
+    /// Only the admin may revoke, mirroring `attest`. Revoking an asset with no
+    /// live attestation returns [`Error::NotAttested`] rather than silently
+    /// succeeding, so an operator learns the entry was already absent.
+    ///
+    /// Revoked and never-attested are deliberately indistinguishable: both
+    /// return `None`. The contract keeps no tombstone, so it does not claim to
+    /// tell them apart. See `docs/contract-interface.md`.
+    ///
+    /// Revocation publishes no event. The event schema is defined by attestation
+    /// writes only; a revocation event is [#92](https://github.com/use-assay/Assay/issues/92)'s
+    /// concern.
+    pub fn revoke(env: Env, asset: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        if !env
+            .storage()
+            .persistent()
+            .has(&DataKey::Safety(asset.clone()))
+        {
+            return Err(Error::NotAttested);
+        }
+
+        env.storage().persistent().remove(&DataKey::Safety(asset));
         Ok(())
     }
 

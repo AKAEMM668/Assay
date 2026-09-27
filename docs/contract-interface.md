@@ -43,6 +43,7 @@ pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool;
 pub fn is_safe_masked(env: Env, asset: Address, forbidden_mask: u32, max_age_secs: u64) -> bool;
 pub fn attest(env: Env, asset: Address, severity: u32, flags: u32, evidence_hash: BytesN<32>) -> Result<(), Error>;
+pub fn revoke(env: Env, asset: Address) -> Result<(), Error>;
 pub fn init(env: Env, admin: Address) -> Result<(), Error>;
 ```
 
@@ -155,6 +156,28 @@ per use class.
 `attest` rejects an attestation whose clawback bit is set below `SEVERITY_HIGH`.
 `is_safe` re-checks it anyway. A gate should not have to assume the writer was
 correct.
+
+### Revocation removes the entry
+
+`revoke` withdraws an attestation. It is the admin-only counterpart to `attest`:
+after it, `get_safety` returns `None` and both gate helpers fail closed. Until
+now the only remedy for a wrong attestation was to overwrite it, which asserts a
+new claim rather than retracting one; revocation retracts.
+
+**Revoking an asset with no live attestation returns `Error::NotAttested`.** It
+is not a silent no-op: an operator who revokes twice, or revokes something that
+was never attested, learns the entry was already absent rather than getting a
+false success.
+
+**Revoked and never-attested are deliberately indistinguishable.** `revoke`
+deletes the key and keeps no tombstone, so both states return `None` and both
+reject a further `revoke` with `NotAttested`. A consumer cannot tell a withdrawn
+claim from one that was never made, and this contract does not pretend
+otherwise. Distinguishing them would mean storing a marker, which is the
+history/audit question ([#92](https://github.com/use-assay/Assay/issues/92)), not
+revocation.
+
+Revocation publishes no event; the event schema is still attestation writes only.
 
 ## Using it
 

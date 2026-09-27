@@ -313,3 +313,87 @@ fn attest_rejects_unauthorized_caller() {
     // non-admin caller must not be able to write attestations.
     assert!(err.is_err());
 }
+
+// --- Revocation (#86) ---
+
+/// An admin can withdraw a wrong attestation. Afterwards the asset reads as if
+/// it had never been attested, so every gate fails closed — the honest answer
+/// when a claim turns out not to be supported.
+#[test]
+fn revoke_removes_attestation_and_gate_fails_closed() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    client.attest(&asset, &SEVERITY_MEDIUM, &MECH_AUTH_REVOCABLE, &hash(&env));
+    assert!(client.get_safety(&asset).is_some());
+    assert!(client.is_safe(&asset, &SEVERITY_HIGH, &0));
+
+    client.revoke(&asset);
+
+    assert_eq!(client.get_safety(&asset), None);
+    assert!(!client.is_safe(&asset, &SEVERITY_CRITICAL, &0));
+    assert!(!client.is_safe_masked(&asset, &0, &0));
+}
+
+/// Revoking an asset with no live attestation is an error rather than a silent
+/// success: an operator learns the entry was already absent. A second revoke of
+/// an already-revoked asset fails the same way, because revocation leaves no
+/// tombstone to distinguish it from never-attested.
+#[test]
+fn revoke_non_existent_attestation_errors() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    let err = client
+        .try_revoke(&asset)
+        .expect_err("revoking a never-attested asset must fail");
+    assert_eq!(err, Ok(Error::NotAttested));
+
+    client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+    client.revoke(&asset);
+
+    let err = client
+        .try_revoke(&asset)
+        .expect_err("revoking an already-revoked asset must fail");
+    assert_eq!(err, Ok(Error::NotAttested));
+}
+
+/// Revocation is a withdrawal, not a tombstone: the admin can attest the asset
+/// again, and the fresh claim is readable.
+#[test]
+fn revoke_then_reattest_restores_read() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    client.attest(&asset, &SEVERITY_HIGH, &MECH_CLAWBACK_ENABLED, &hash(&env));
+    client.revoke(&asset);
+    assert_eq!(client.get_safety(&asset), None);
+
+    env.ledger().set_timestamp(2_000);
+    client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+
+    let got = client
+        .get_safety(&asset)
+        .expect("re-attested asset should exist");
+    assert_eq!(got.severity, SEVERITY_CLEAR);
+    assert_eq!(got.attested_at, 2_000);
+}
+
+/// Only the admin may revoke, mirroring `attest`. This test does not use
+/// mock_all_auths(), so require_auth() actually enforces and a non-admin caller
+/// is rejected.
+#[test]
+fn revoke_rejects_unauthorized_caller() {
+    let env = Env::default();
+    let contract_id = env.register(SafetyRegistry, ());
+    let client = SafetyRegistryClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    client.init(&admin);
+
+    let asset = Address::generate(&env);
+
+    let err = client
+        .try_revoke(&asset)
+        .expect_err("non-admin must be rejected");
+    assert!(err.is_err());
+}
