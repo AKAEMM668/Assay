@@ -54,6 +54,19 @@ pub const MECH_BLOCKLISTED: u32 = 1 << 5;
 /// this mask has `severity >= SEVERITY_HIGH` by construction.
 pub const CONFISCATION_MASK: u32 = MECH_CLAWBACK_ENABLED;
 
+/// Capability bits only: the mechanics that are issuer powers over a holder's
+/// balance (auth_required, auth_revocable, auth_clawback_enabled). Everything
+/// outside this mask (auth_immutable, domain_unverified, blocklisted) is a
+/// reported fact, not a power.
+///
+/// This is the mask a consumer should reach for when it wants "the dangerous
+/// bits": #26 happened because a caller hand-rolled that mask from memory and
+/// silently missed the other half of the bitset. The Go side exports the same
+/// value as `mechanics.CapabilityMask`; the ABI drift test fails the build if
+/// the two ever disagree. Bit positions are unchanged — existing attestations
+/// commit to them.
+pub const CAPABILITY_MASK: u32 = MECH_AUTH_REQUIRED | MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED;
+
 /// Named forbidden-bit masks for [`SafetyRegistry::is_safe_masked`]. They exist
 /// so a caller expresses a policy ("I never accept confiscation") rather than
 /// hand-rolling bits. A caller may still pass any `u32`; these are the two
