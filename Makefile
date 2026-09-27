@@ -23,17 +23,14 @@ build:
 test:
 	go test -race $(PKG)
 
-# Runs the suite with network access removed, enforcing CONTRIBUTING.md's "tests
-# must not require network access". A test that reaches a live source fails here
-# instead of flaking for everyone else later. Needs `unshare` plus root or
-# passwordless sudo to create a network namespace; module download and
-# compilation run first, with the network. See scripts/offline-test.sh.
-offline-test:
-	./scripts/offline-test.sh
-
+# cover prints the same per-package table CI puts in the job summary
+# (scripts/coverage-report.sh), lowest coverage first. It reports; it does not
+# gate. The test exit status is preserved so a failing test still fails.
 cover:
-	go test -coverprofile=coverage.out $(PKG)
-	go tool cover -func=coverage.out | tail -1
+	@go test -covermode=atomic -coverprofile=coverage.out $(PKG) > coverage.log 2>&1; \
+	rc=$$?; cat coverage.log; echo; \
+	./scripts/coverage-report.sh coverage.log coverage.out; \
+	exit $$rc
 
 fmt:
 	gofmt -w .
@@ -124,6 +121,6 @@ eval-compare:
 	@go run ./cmd/eval -compare docs/eval-baseline.json $(if $(STRICT),-strict,)
 
 clean:
-	rm -f $(BINARY) coverage.out coverage.html
+	rm -f $(BINARY) coverage.out coverage.html coverage.log
 	rm -rf $(CONTRACTS)/out
 	cd $(CONTRACTS) && cargo clean

@@ -41,8 +41,37 @@ jobs:
 
       # Tests must pass without network access: every check is a pure function
       # over fixtures captured under internal/*/testdata.
+      #
+      # The same run records coverage, so the numbers cost no second test pass.
+      # The default bash shell runs with pipefail, so tee does not hide a
+      # failing test.
       - name: test
-        run: go test -race ./...
+        run: go test -race -covermode=atomic -coverprofile=coverage.out ./... 2>&1 | tee go-test.log
+
+      # Per-package coverage, in the log and in the job summary. It reports and
+      # does not gate: there is no threshold (#130). It also sends nothing to a
+      # third-party service. The report is computed here from `go test` output,
+      # and the profile is kept as a GitHub artifact. Runs after a test failure
+      # too, since partial numbers are still information.
+      - name: coverage report
+        if: ${{ !cancelled() }}
+        run: |
+          report=$(./scripts/coverage-report.sh go-test.log coverage.out)
+          printf '%s\n' "$report"
+          {
+            echo "### Go coverage"
+            echo
+            printf '%s\n' "$report"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: upload coverage profile
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14
+          if-no-files-found: warn
 
   # The same suite once more with the network removed. This is the enforcement
   # of CONTRIBUTING.md's "tests must not require network access": without it the
