@@ -82,11 +82,23 @@ jobs:
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
+      # Cargo.lock is committed but is only enforced if cargo is told to
+      # respect it. Without --locked, cargo silently re-resolves to whatever
+      # versions the index currently serves, so CI would stop testing the
+      # dependency set the repository claims -- and for a project whose stated
+      # invariant is no new dependency without a decision, that is the wrong
+      # thing to be testing. A stale or missing lockfile entry now fails the
+      # build instead of resolving quietly. cargo fmt is left alone: it does
+      # not resolve dependencies and does not accept --locked.
+      #
+      # These flags live only in CI, not in the Makefile, so a contributor who
+      # changes a manifest and has not refreshed the lockfile yet can still
+      # build and test locally.
       - name: cargo clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: cargo test
-        run: cargo test
+        run: cargo test --locked
 
   # Merge gate: catches PRs that touch maintainer-owned safety-critical paths
   # without manual review. A PR touching only docs or tests merges cleanly;
