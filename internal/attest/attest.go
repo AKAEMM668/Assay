@@ -78,7 +78,7 @@ var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so
 type ProvenanceStatus string
 
 const (
-	ProvenanceValid   ProvenanceStatus = "valid"
+	ProvenanceValid   ProvenanceStatus = "valid" // ProvenanceValid means the scanner version meets the caller's minimum.
 	ProvenanceInvalid ProvenanceStatus = "invalid" // Version below caller's minimum
 	ProvenanceUnknown ProvenanceStatus = "unknown" // No version recorded (pre-v2 attestation)
 )
@@ -133,7 +133,6 @@ func CompareVersions(v1, v2 string) int {
 	}
 	return 0
 }
-
 
 // FromReport derives the attest() arguments for a scan report.
 //

@@ -427,7 +427,9 @@ fn is_safe_property_exhaustive() {
 
                         // If severity is valid (<= 4) and flags do not violate clawback invariant, write attestation
                         // Note: If clawback bit set and severity < 3, try_attest will reject write, so we manually test stored safety
-                        if attested_flags & MECH_CLAWBACK_ENABLED != 0 && attested_sev < SEVERITY_HIGH {
+                        if attested_flags & MECH_CLAWBACK_ENABLED != 0
+                            && attested_sev < SEVERITY_HIGH
+                        {
                             // Invalid write time invariant; cannot attest on chain directly, skipped from valid store
                             continue;
                         }
@@ -470,6 +472,3 @@ fn error_code_values_are_abi() {
     assert_eq!(Error::InvalidSeverity as u32, 3);
     assert_eq!(Error::InconsistentAttestation as u32, 4);
 }
-
-
-

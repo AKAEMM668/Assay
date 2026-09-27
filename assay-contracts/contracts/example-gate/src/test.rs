@@ -195,4 +195,3 @@ fn error_code_values_are_abi() {
     assert_eq!(Error::IssuerCanTakeIt as u32, 3);
     assert_eq!(Error::SeverityTooHigh as u32, 4);
 }
-
