@@ -10,7 +10,8 @@ usage:
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
-  assay serve [-addr]             serve the HTTP API and UI
+  assay serve [-addr] [-history PATH]
+                                  serve the HTTP API and UI
 ```
 
 ## assay scan
@@ -74,8 +75,17 @@ Semantics:
 ## assay serve
 
 Serves the HTTP API and UI. The API exposes the same reports the CLI prints;
-see `docs/integrating.md` for what a consumer reads out of it.
+see `docs/integrating.md` for what a consumer reads out of it, and
+[history.md](history.md) for the observation history endpoint.
 
 ```
 ./assay serve -addr :8080
+./assay serve -addr :8080 -history /var/lib/assay/history.jsonl
 ```
+
+Each successful `GET /api/v1/scan` records an observation, and
+`GET /api/v1/history?asset=CODE-ISSUER` returns them in time order with the
+derived transitions. `-history` points that store at an append-only JSON Lines
+log so it survives a restart; without it, history is in memory and lost when the
+process exits. The default retention is 256 observations per asset and the
+policy is in [history.md](history.md).

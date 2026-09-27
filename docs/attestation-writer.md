@@ -233,10 +233,14 @@ compromised it.
 - Attest **any severity for any asset**, including `clear` for a known scam
   and `high` for an asset it does not like. Nothing on-chain prevents this;
   the contract cannot check an `evidence_hash`, it only stores it.
-- **Overwrite** an existing attestation — `attest` has no revocation and no
-  history ([#86](https://github.com/use-assay/Assay/issues/86),
-  [#92](https://github.com/use-assay/Assay/issues/92)), so a bad write can
-  only be corrected by a newer write, and the overwritten values are gone.
+- **Overwrite** an existing attestation. `attest` keeps no history
+  ([#92](https://github.com/use-assay/Assay/issues/92)), so the overwritten
+  values are gone. `revoke`
+  ([#86](https://github.com/use-assay/Assay/issues/86)) lets an honest admin
+  withdraw a bad write rather than overwrite it, but the same key can also
+  revoke a *correct* attestation. That is a denial of service, and it fails
+  closed. `revoke` is in the contract source but not yet on the live testnet
+  deployment ([deployment.md](deployment.md#migrating-to-a-registry-with-revoke)).
 - Attest assets **never scanned**, with an `evidence_hash` of all zeroes.
 - Refuse to write, or stop writing — the fail-open-by-neglect attack. It
   degrades the registry to staleness, which `is_safe`'s `max_age_secs`
