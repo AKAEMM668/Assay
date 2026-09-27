@@ -314,5 +314,9 @@ cannot tell you which — that is what `attested_at` and your own re-scan are fo
   of independent attesters yet.
 - **Nothing refreshes the attestations.** They are exactly as fresh as their
   `attested_at`. Choose a `max_age_secs` you would actually accept.
-- Testnet is periodically reset, and Soroban persistent entries expire if their
-  TTL is not extended. Either will remove these attestations.
+- Testnet is periodically reset, which removes these attestations. The live
+  registry's entries are also archived (see
+  [deployment.md](deployment.md#entry-lifetime)). An archived attestation is
+  restored when read, with its original `attested_at`, and your transaction pays
+  the restore fee. It does **not** read as `None`, so only `max_age_secs`
+  protects you from an old one.
