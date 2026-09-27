@@ -33,6 +33,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   assay scan CODE-ISSUER          classify one asset and print the report as JSON
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
+  assay verify [-max-age] [-json] CODE-ISSUER
+                                  re-scan, recompute the hash and compare with the chain
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr] [-history PATH]
@@ -53,6 +55,8 @@ func run(args []string) error {
 		return runScan(args[1:])
 	case "attestation":
 		return runAttestation(args[1:])
+	case "verify":
+		return runVerify(args[1:])
 	case "history":
 		return runHistory(args[1:])
 	case "serve":
