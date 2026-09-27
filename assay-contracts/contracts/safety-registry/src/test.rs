@@ -1,5 +1,7 @@
 #![cfg(test)]
 
+pub mod fail_closed;
+
 use super::*;
 use soroban_sdk::{
     symbol_short,
