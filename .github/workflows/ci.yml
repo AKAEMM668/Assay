@@ -44,6 +44,26 @@ jobs:
       - name: test
         run: go test -race ./...
 
+  # The same suite once more with the network removed. This is the enforcement
+  # of CONTRIBUTING.md's "tests must not require network access": without it the
+  # promise is only discipline, and the first test that reaches a live source
+  # passes for its author and for CI before it flakes for everyone else. It is a
+  # separate job so a failure is clearly attributable -- a red "Go (no network)"
+  # says a test needed the network, not that the code is broken. Module download
+  # and compilation happen with the network; only the tests are isolated.
+  offline:
+    name: Go (no network)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: test without network
+        run: make offline-test
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest

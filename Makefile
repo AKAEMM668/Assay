@@ -10,7 +10,7 @@ NETWORK ?= testnet
 SOURCE ?= assay-attester
 CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 
-.PHONY: all build test cover lint fmt vet run clean \
+.PHONY: all build test cover lint fmt vet run clean offline-test \
 	contract-test contract-lint contract-build \
 	build-contract deploy-testnet attest read verify-gate \
 	eval-record eval-compare
@@ -22,6 +22,14 @@ build:
 
 test:
 	go test -race $(PKG)
+
+# Runs the suite with network access removed, enforcing CONTRIBUTING.md's "tests
+# must not require network access". A test that reaches a live source fails here
+# instead of flaking for everyone else later. Needs `unshare` plus root or
+# passwordless sudo to create a network namespace; module download and
+# compilation run first, with the network. See scripts/offline-test.sh.
+offline-test:
+	./scripts/offline-test.sh
 
 cover:
 	go test -coverprofile=coverage.out $(PKG)

@@ -42,10 +42,11 @@ the reason to have a check at all is that it knows when that is fine.
 ## Development
 
 ```sh
-make test     # tests with -race
-make lint     # golangci-lint
-make cover    # coverage report
-make run      # start the API on :8080
+make test         # tests with -race
+make offline-test # the same suite with network access removed
+make lint         # golangci-lint
+make cover        # coverage report
+make run          # start the API on :8080
 ```
 
 The Soroban side, which needs the [stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup):
@@ -102,9 +103,20 @@ check: no unjustified dependency, no threshold moved without a reason
 traceable to the attestation run, nothing published that the evidence does
 not support.
 
-Tests must not require network access. Fetchers are interfaces; tests use
-fixtures captured from real responses under `internal/*/testdata/`. When you
-capture a new fixture, note the date and the URL it came from.
+Tests must not require network access, and CI enforces it: the `Go (no network)`
+job runs the suite with the network removed, so a test that reaches a live source
+fails there instead of passing for its author and flaking for everyone else.
+Fetchers are interfaces; tests use fixtures captured from real responses under
+`internal/*/testdata/`. When you capture a new fixture, note the date and the URL
+it came from.
+
+Run the same check locally with `make offline-test`. It needs `unshare` plus root
+or passwordless `sudo` to create a network namespace; module download and
+compilation happen first, with the network, and only the tests run without it.
+The namespace brings loopback back up, so `httptest`-based tests keep passing; a
+test that fails is a test that was depending on the network. If the isolation
+itself cannot start, the run exits non-zero and says so, rather than silently
+testing with the network up.
 
 ## Commits
 
