@@ -25,7 +25,13 @@ type Server struct {
 
 // NewServer returns a Server backed by the production scanner.
 func NewServer(log *slog.Logger) *Server {
-	return &Server{Scanner: scan.New(), Log: log}
+	return NewServerWithScanner(scan.New(), log)
+}
+
+// NewServerWithScanner returns a Server that scans with the given Scanner,
+// letting the caller choose its cache policy.
+func NewServerWithScanner(scanner *scan.Scanner, log *slog.Logger) *Server {
+	return &Server{Scanner: scanner, Log: log}
 }
 
 // Handler returns the configured HTTP routes.

@@ -70,14 +70,72 @@ type Scanner struct {
 	Engine  *mechanics.Engine
 }
 
-// New returns a Scanner wired to the public production sources.
+// Options configures a Scanner.
+//
+// The cache options exist because every scan consumes a free, third-party
+// service, and the cost of not re-reading it is staleness. Which way to trade
+// is a deployment's to make, not a constant's: a one-shot CLI scan can afford
+// to re-fetch everything, while a long-lived server answering repeated scans of
+// the same issuer should not rebuild them from scratch each time. The default
+// is the conservative one documented in docs/caching.md.
+//
+// Ledger lookups are deliberately NOT covered here. See NewWithOptions.
+type Options struct {
+	// ReputationDirectoryTTL and ReputationBlocklistTTL bound how long a
+	// curated StellarExpert answer may be reused, measured from the fetch that
+	// produced it. A zero TTL disables caching of that source.
+	ReputationDirectoryTTL time.Duration
+	ReputationBlocklistTTL time.Duration
+
+	// NoReputationCache disables the reputation cache outright: every scan
+	// re-fetches both curated sources. Use it when a stale answer would be
+	// unacceptable and the extra requests are affordable.
+	NoReputationCache bool
+}
+
+// DefaultOptions returns the production cache policy.
+func DefaultOptions() Options {
+	return Options{
+		ReputationDirectoryTTL: stellarexpert.DefaultDirectoryTTL,
+		ReputationBlocklistTTL: stellarexpert.DefaultBlocklistTTL,
+	}
+}
+
+// New returns a Scanner wired to the public production sources with the
+// default cache policy.
 func New() *Scanner {
+	return NewWithOptions(DefaultOptions())
+}
+
+// NewWithOptions returns a Scanner wired to the public production sources with
+// the given cache policy.
+//
+// Only the reputation lookups are cached. Horizon is left uncached on purpose:
+// issuer authorization flags are the capability axis severity is derived from,
+// they can change in one ledger close (~5 s), and there is no retrieved-at
+// field in an attestation that could carry the age of a stale flag read. A TTL
+// short enough to be honest about the ledger would not save a request; a TTL
+// long enough to save one would misstate the issuer's power. See
+// docs/caching.md.
+func NewWithOptions(opts Options) *Scanner {
 	return &Scanner{
 		Horizon: horizon.New(""),
 		Toml:    sep1.NewFetcher(),
-		Expert:  stellarexpert.New(""),
+		Expert:  stellarexpert.NewWithOptions("", expertOptions(opts)),
 		Engine:  mechanics.NewEngine(),
 	}
+}
+
+// expertOptions maps a Scanner's cache policy onto the StellarExpert client's.
+func expertOptions(opts Options) stellarexpert.Options {
+	o := stellarexpert.DefaultOptions()
+	o.DirectoryTTL = opts.ReputationDirectoryTTL
+	o.BlocklistTTL = opts.ReputationBlocklistTTL
+	if opts.NoReputationCache {
+		o.DirectoryTTL = 0
+		o.BlocklistTTL = 0
+	}
+	return o
 }
 
 // Subject fetches everything the checks need for one asset.
@@ -129,8 +187,13 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 		if err != nil {
 			sub.BlockedErr = err.Error()
 		} else {
-			sub.Blocked = blocked
-			sub.BlockedFetchedAt = time.Now().UTC()
+			sub.Blocked = blocked.Value
+			// The source's OWN completion time, which on a cache hit is the
+			// instant the answer was originally fetched. Stamping the lookup
+			// time here instead is the one thing the cache must never cause:
+			// Evidence.RetrievedAt would then claim a freshness the data does
+			// not have, in the report and in the preimage a verifier re-derives.
+			sub.BlockedFetchedAt = blocked.FetchedAt
 		}
 	}
 
@@ -141,8 +204,9 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	if err != nil {
 		sub.DirectoryErr = err.Error()
 	} else {
-		sub.Directory = entry
-		sub.DirectoryFetchedAt = time.Now().UTC()
+		sub.Directory = entry.Value
+		// As above: the directory answer's own fetch time, not this scan's.
+		sub.DirectoryFetchedAt = entry.FetchedAt
 	}
 
 	return sub, nil

@@ -32,6 +32,11 @@ func usage() {
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr]             serve the HTTP API and UI
+
+Every command that scans accepts:
+  -cache-directory-ttl D   reuse a curated directory answer for D (0 disables)
+  -cache-blocklist-ttl D   reuse a blocklist answer for D (0 disables)
+  -no-cache                re-fetch curated sources on every scan
 `)
 }
 
@@ -59,10 +64,15 @@ func run(args []string) error {
 }
 
 func runScan(args []string) error {
-	if len(args) != 1 {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	cache := cacheFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
 		return fmt.Errorf("scan takes exactly one asset (CODE-ISSUER)")
 	}
-	asset, err := scan.ParseAsset(args[0])
+	asset, err := scan.ParseAsset(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -70,7 +80,7 @@ func runScan(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -78,6 +88,33 @@ func runScan(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
+}
+
+// cacheFlags registers the consumed-signal cache flags shared by every command
+// that scans, and returns a constructor for the Scanner options they describe.
+//
+// Caching is on by default because every scan consumes a free, rate-limited
+// service, and re-fetching an answer that has not changed is discourteous to
+// its operators. The flags exist so a deployment can trade the other way — a
+// one-shot scan can afford to re-fetch everything — without the choice being
+// hidden in a constant. Whatever the choice, Evidence.RetrievedAt is the time
+// the source produced its answer, so a report never reads as fresher than its
+// data. See docs/caching.md.
+func cacheFlags(fs *flag.FlagSet) func() scan.Options {
+	def := scan.DefaultOptions()
+	directory := fs.Duration("cache-directory-ttl", def.ReputationDirectoryTTL,
+		"how long a curated directory answer may be reused (0 disables)")
+	blocklist := fs.Duration("cache-blocklist-ttl", def.ReputationBlocklistTTL,
+		"how long a blocklist answer may be reused (0 disables); lower it to tighten a safety-critical window")
+	off := fs.Bool("no-cache", false,
+		"re-fetch curated sources on every scan instead of serving a cached answer")
+	return func() scan.Options {
+		return scan.Options{
+			ReputationDirectoryTTL: *directory,
+			ReputationBlocklistTTL: *blocklist,
+			NoReputationCache:      *off,
+		}
+	}
 }
 
 // runAttestation prints the arguments of an on-chain attest() call for one
@@ -89,6 +126,7 @@ func runScan(args []string) error {
 // recomputed from -preimage — before a key ever touches them.
 func runAttestation(args []string) error {
 	fs := flag.NewFlagSet("attestation", flag.ContinueOnError)
+	cache := cacheFlags(fs)
 	preimage := fs.Bool("preimage", false, "include the canonical bytes evidence_hash commits to")
 	raw := fs.Bool("raw", false, "print only the attest() arguments, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -105,7 +143,7 @@ func runAttestation(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -129,6 +167,7 @@ func runAttestation(args []string) error {
 
 func runHistory(args []string) error {
 	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	cache := cacheFlags(fs)
 	guarantee := fs.Bool("guarantee", false, "exit non-zero when there is no history")
 	raw := fs.Bool("raw", false, "print only the history, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -146,7 +185,7 @@ func runHistory(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -242,14 +281,18 @@ type historyEntry struct {
 
 func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	cache := cacheFlags(fs)
 	addr := fs.String("addr", ":8080", "listen address")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	// The cache lives as long as the server process, which is where it earns
+	// its keep: repeated scans of the same issuer reuse an answer instead of
+	// re-reading a free service on every request.
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(log).Handler(),
+		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Info("assay listening", "addr", *addr)
