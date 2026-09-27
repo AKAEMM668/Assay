@@ -148,6 +148,7 @@ type Subject struct {
 	// evidence carries the time of the source it came from, and the report
 	// carries the time the subject assembly began.
 	ScannedAt time.Time
+	FetchedAt time.Time
 }
 
 // HomeDomain returns the issuer's advertised home_domain, if any.
@@ -199,6 +200,20 @@ type Report struct {
 	// consumer can see which axis is missing rather than only that one is.
 	UndeterminedChecks []string `json:"undetermined_checks"`
 
+	// CheckSet is the sorted IDs of the checks the engine that produced this
+	// report actually ran. It is what makes a suppressed check — one removed
+	// from the engine — distinguishable from a check that ran and found
+	// nothing: without it, a report from a smaller engine is byte-identical to
+	// one from the full engine whenever the removed check moved no other
+	// field, and the resulting attestation hashes the same.
+	//
+	// It is committed to by evidence_hash under the v2 preimage encoding (see
+	// internal/attest), so a verifier can name the check a report is missing
+	// rather than report a generic mismatch. Reports written before
+	// check-set binding carry no CheckSet and are read as "unknown", never as
+	// "complete".
+	CheckSet []string `json:"checks,omitempty"`
+
 	Mechanics     Mechanic   `json:"-"`
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
@@ -221,6 +236,21 @@ func NewEngine() *Engine {
 	}}
 }
 
+// CheckIDs returns the stable IDs of the checks this engine runs, sorted so
+// the set is comparable and hash-stable regardless of registration order.
+//
+// The engine's check set is part of what a report claims: a report says "these
+// checks ran" as well as "here is what they found". Returning the set lets a
+// verifier detect a check that was removed rather than one that found nothing.
+func (e *Engine) CheckIDs() []string {
+	ids := make([]string, 0, len(e.Checks))
+	for _, c := range e.Checks {
+		ids = append(ids, c.ID())
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 // Run executes every check and aggregates the results.
 //
 // Aggregation rules, which are the judgment model in code:
@@ -236,6 +266,7 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		Asset:              s.Asset,
 		Accountability:     AccountabilityUnknown,
 		ScannedAt:          s.ScannedAt,
+		CheckSet:           e.CheckIDs(),
 		Findings:           []Finding{},
 		Evidence:           []Evidence{},
 		UndeterminedChecks: []string{},

@@ -26,7 +26,9 @@
 //! listing escalates severity to [`SEVERITY_CRITICAL`]. Reputation can raise a
 //! level, never lower one.
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, BytesN, Env};
+use soroban_sdk::{
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
+};
 
 /// No authorization flags: the issuer has no special power over holders.
 pub const SEVERITY_CLEAR: u32 = 0;
@@ -51,6 +53,44 @@ pub const MECH_BLOCKLISTED: u32 = 1 << 5;
 /// Mechanics that let an issuer take a balance outright. Any asset matching
 /// this mask has `severity >= SEVERITY_HIGH` by construction.
 pub const CONFISCATION_MASK: u32 = MECH_CLAWBACK_ENABLED;
+
+/// Named forbidden-bit masks for [`SafetyRegistry::is_safe_masked`]. They exist
+/// so a caller expresses a policy ("I never accept confiscation") rather than
+/// hand-rolling bits. A caller may still pass any `u32`; these are the two
+/// documented shapes.
+///
+/// `POLICY_MASK_CONFISCATION_ONLY` refuses only confiscation capability. A
+/// protocol that can tolerate a freeze but never a clawback uses this mask.
+pub const POLICY_MASK_CONFISCATION_ONLY: u32 = MECH_CLAWBACK_ENABLED;
+
+/// `POLICY_MASK_FREEZE_INCLUSIVE` refuses both freeze and confiscation. A
+/// custody product that must never see a holder's balance altered by the
+/// issuer uses this mask.
+pub const POLICY_MASK_FREEZE_INCLUSIVE: u32 = MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED;
+
+/// Event emitted on every successful `attest` write. Rejected attestations
+/// (`InvalidSeverity`, `InconsistentAttestation`, unauthorized caller) publish
+/// nothing, so observers never see writes that did not happen.
+///
+/// Topics: `("attest", asset)`. The asset address is a topic (not a data
+/// field) so indexers can subscribe by asset without decoding every event.
+/// Two topics stay well within the SDK's four-topic limit.
+///
+/// Data is a `Map` keyed by field name for readability from RPC output. The
+/// exact shape is part of the observable ABI: see `docs/contract-interface.md`.
+#[contractevent(topics = ["attest"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Attested {
+    /// The attested asset, identified by its Stellar Asset Contract address.
+    #[topic]
+    pub asset: Address,
+    /// Capability severity written for the asset.
+    pub severity: u32,
+    /// Mechanic bitset written for the asset.
+    pub flags: u32,
+    /// Ledger timestamp of the write.
+    pub attested_at: u64,
+}
 
 /// A stored safety attestation for one asset.
 #[contracttype]
@@ -136,15 +176,28 @@ impl SafetyRegistry {
             return Err(Error::InconsistentAttestation);
         }
 
+        let attested_at = env.ledger().timestamp();
         let safety = Safety {
             severity,
             flags,
             evidence_hash,
-            attested_at: env.ledger().timestamp(),
+            attested_at,
         };
         env.storage()
             .persistent()
-            .set(&DataKey::Safety(asset), &safety);
+            .set(&DataKey::Safety(asset.clone()), &safety);
+
+        // Publish after the write. Emitting before would let a storage failure
+        // produce a visible "attest" for an attestation that does not exist;
+        // emitting after means indexers observe writes that actually happened.
+        // Rejected calls return early above, so no event is published for them.
+        Attested {
+            asset,
+            severity,
+            flags,
+            attested_at,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -186,6 +239,46 @@ impl SafetyRegistry {
             let now = env.ledger().timestamp();
             // saturating_sub avoids underflow if an attestation carries a
             // timestamp ahead of the current ledger.
+            if now.saturating_sub(safety.attested_at) > max_age_secs {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// The mask-based fail-closed gate.
+    ///
+    /// Returns `true` only when an attestation exists, is fresh enough, and
+    /// carries none of the bits set in `forbidden_mask`. Every other path
+    /// returns `false`: never attested, stale, or forbidden bit set. An empty
+    /// `forbidden_mask` still requires an attestation — an unattested asset
+    /// must never read as safe, even with a policy that forbids nothing.
+    ///
+    /// Severity is a total order; policies are not. Severity-based gating with
+    /// `is_safe` collapses two independent questions ("can they freeze it?"
+    /// "can they take it?") onto one axis. A caller that can tolerate a freeze
+    /// but never a confiscation should gate on `POLICY_MASK_CONFISCATION_ONLY`;
+    /// a custody product refusing both should gate on
+    /// `POLICY_MASK_FREEZE_INCLUSIVE`. See `docs/contract-interface.md`.
+    ///
+    /// `max_age_secs` of 0 disables the freshness requirement.
+    pub fn is_safe_masked(
+        env: Env,
+        asset: Address,
+        forbidden_mask: u32,
+        max_age_secs: u64,
+    ) -> bool {
+        let Some(safety) = Self::get_safety(env.clone(), asset) else {
+            return false; // never attested: fail closed
+        };
+
+        if safety.flags & forbidden_mask != 0 {
+            return false;
+        }
+
+        if max_age_secs > 0 {
+            let now = env.ledger().timestamp();
             if now.saturating_sub(safety.attested_at) > max_age_secs {
                 return false;
             }

@@ -12,7 +12,8 @@ CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 
 .PHONY: all build test cover lint fmt vet run clean \
 	contract-test contract-lint contract-build \
-	build-contract deploy-testnet attest read verify-gate
+	build-contract deploy-testnet attest read verify-gate \
+	eval-record eval-compare
 
 all: build
 
@@ -100,6 +101,19 @@ read:
 verify-gate:
 	@test -n "$(BASE)" || { echo 'usage: make verify-gate BASE=<sha-or-ref> HEAD=<sha-or-ref>'; exit 2; }
 	./scripts/merge-gate.sh "$(BASE)" "$(HEAD)"
+
+# Records the labelled corpus's classification, per subject and per check.
+# Commit the result when the classifier's output is intended to change; it is
+# the baseline eval-compare diffs against.
+eval-record:
+	go run ./cmd/eval -out docs/eval-baseline.json
+
+# Compares the current classifier against the recorded baseline and reports
+# what moved: severity, mechanics and evidence separately, with undetermined
+# subjects and corpus membership changes reported on their own. Exits 0 on a
+# movement so it can be read as a report; add STRICT=1 to make movement fail.
+eval-compare:
+	@go run ./cmd/eval -compare docs/eval-baseline.json $(if $(STRICT),-strict,)
 
 clean:
 	rm -f $(BINARY) coverage.out coverage.html

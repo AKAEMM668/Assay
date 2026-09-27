@@ -27,9 +27,11 @@ import (
 // the API documents the value in release notes.
 const version = "v0.1.0"
 
-// maxBody caps the stellar.toml read. Real files are a few KB; this stops a
-// hostile domain from streaming an unbounded body at the scanner.
-const maxBody = 1 << 20 // 1 MiB
+// MaxBody caps the stellar.toml read. Real files are a few KB; this stops a
+// hostile domain from streaming an unbounded body at the scanner. It is
+// exported so the resource-exhaustion tests can assert that a reader is never
+// asked for more than this, rather than assuming it.
+const MaxBody = 1 << 20 // 1 MiB
 
 // ErrNoDomain reports that the issuer account advertises no home_domain, so
 // there is nothing to verify against.
@@ -135,7 +137,7 @@ func (f *Fetcher) Fetch(ctx context.Context, domain string) (*Doc, error) {
 		return nil, fmt.Errorf("sep1: fetch %s: status %d", target, resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody))
 	if err != nil {
 		return nil, fmt.Errorf("sep1: read %s: %w", target, err)
 	}
