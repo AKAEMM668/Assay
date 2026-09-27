@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,54 @@ const PreimageVersion = "assay-evidence-v1"
 // keep reproducing. A report carrying no bound check set is still written as
 // v1; only reports that ran through an engine with a check set use v2.
 const PreimageVersionCheckSet = "assay-evidence-v2"
+
+// PreimageVersionScanner is the encoding that also binds the identity of the
+// code that produced the report (issue #40). It adds a `scanner` line after
+// the version line, so two scanner versions that classify an asset
+// differently can never produce the same hash — a downgrade to a version
+// with a known bug becomes detectable instead of indistinguishable.
+//
+// It is a v3 rather than an edit to v2 because `assay-evidence-v2` is already
+// live as the check-set encoding: reusing the name for a different byte
+// layout would make "v2" mean two things, and every hash written under one
+// of them would be unverifiable by a reader expecting the other. Existing v1
+// and v2 encodings keep their exact bytes — only reports that carry both a
+// bound check set and a scanner identity move to v3.
+const PreimageVersionScanner = "assay-evidence-v3"
+
+// ScannerIdentity identifies the code that produced a report, for the v3
+// preimage's `scanner` line (issue #40).
+//
+// The choice of WHAT identifies a scanner was the decision this issue asked
+// to be made. A build-stamped commit hash was rejected: it makes every local
+// dev build produce a different hash for the same evidence, which would make
+// the hash useless for exactly the cross-machine and cross-version comparison
+// the field exists for. The module version (Go's `runtime/debug.BuildInfo`,
+// the same string `go install github.com/use-assay/assay@v1.2.3` records) was
+// chosen instead: it is stable across machines for a given release, changes
+// exactly when the code changes, and is verifiable by anyone who can run the
+// module. Development builds (no version stamped by the build system) report
+// as "devel", the same sentinel `go version -m` prints, so a hash produced by
+// an unstamped build is distinguishable from any tagged release rather than
+// silently pretending to be one.
+//
+// The variable is a var rather than computed at call time so tests can pin a
+// known identity and so a future build-stamping scheme can override it
+// deliberately — with a PreimageVersion review, as any identity change is a
+// hash change.
+var ScannerIdentity = moduleVersion()
+
+// moduleVersion reads the main module's version from the build info embedded
+// by the Go toolchain. "devel" for unstamped builds mirrors what
+// `go version -m` prints for a binary built from source without a version
+// flag.
+func moduleVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok || info.Main.Version == "" || info.Main.Version == "(devel)" {
+		return "devel"
+	}
+	return info.Main.Version
+}
 
 // Params is one attest() call: the arguments, and nothing else.
 //
@@ -136,15 +185,27 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 //
 // The format is line-oriented, tab-separated, LF-terminated, UTF-8:
 //
-//	assay-evidence-v1
+//	assay-evidence-v1                    (no check set, no scanner identity)
 //	asset	CODE-ISSUER
 //	severity	N
 //	base_severity	N
 //	escalated	true|false
 //	mechanics	N
 //	accountability	NAME
-//	checks	ID,ID,...                (v2 only: checks the engine ran, sorted)
 //	evidence	SOURCE	URL	CLAIM      (one per claim, sorted)
+//
+// A report that binds its check set adds one line after `accountability`
+// and is written as:
+//
+//	assay-evidence-v2
+//	checks	ID,ID,...                (checks the engine ran, sorted)
+//
+// A report that also carries a scanner identity adds the identity line
+// immediately after the version line and is written as:
+//
+//	assay-evidence-v3
+//	scanner	VERSION                  (module version, or "devel")
+//	checks	ID,ID,...
 //
 // Two decisions in here are worth stating outright.
 //
@@ -167,6 +228,13 @@ func Preimage(rep *mechanics.Report) string {
 
 	b.WriteString(preimageVersion(rep))
 	b.WriteByte('\n')
+	// The scanner identity line is the v3 addition (issue #40): the hashed
+	// bytes name the code that produced the report, so two versions that
+	// classify differently can never hash identically. It comes right after
+	// the version line — identity before content.
+	if preimageHasScanner(rep) {
+		line(&b, "scanner", escape(ScannerIdentity))
+	}
 	line(&b, "asset", rep.Asset.String())
 	line(&b, "severity", strconv.FormatUint(uint64(rep.Severity), 10))
 	line(&b, "base_severity", strconv.FormatUint(uint64(rep.Base), 10))
@@ -201,11 +269,29 @@ func Preimage(rep *mechanics.Report) string {
 // A report that binds a check set uses v2; one that does not keeps the exact
 // v1 bytes, so an attestation written before check-set binding still
 // reproduces its hash.
+//
+// A report that binds a check set AND carries a scanner identity uses v3
+// (issue #40). The v1 and v2 paths are unchanged byte-for-byte: the ten
+// attestations already on chain were hashed under them and must keep
+// reproducing, which is why the scanner line is gated on a new field rather
+// than written into the existing encodings.
 func preimageVersion(rep *mechanics.Report) string {
+	if preimageHasScanner(rep) {
+		return PreimageVersionScanner
+	}
 	if len(rep.CheckSet) > 0 {
 		return PreimageVersionCheckSet
 	}
 	return PreimageVersion
+}
+
+// preimageHasScanner reports whether a report is written under the v3
+// encoding. Gating on ScannerBound rather than on the identity value keeps
+// the encoding decision a property of the REPORT: an operator who wants v1
+// bytes can produce a report without the binding, and a reader can tell from
+// the version line alone whether the bytes name their producer.
+func preimageHasScanner(rep *mechanics.Report) bool {
+	return rep.ScannerBound
 }
 
 // CheckSetStatus describes whether a report's bound check set can be compared
