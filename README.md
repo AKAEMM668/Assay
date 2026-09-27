@@ -69,6 +69,7 @@ carries an explicit, evaluated position on legitimate clawback use. See
 | [docs/history.md](docs/history.md) | The observation history API: what is retained, for how long, and what an empty history means |
 | [docs/eval.md](docs/eval.md) | Labelled trap/legitimate set and current results |
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
+| [docs/asset-lists.md](docs/asset-lists.md) | Consuming SEP-0042 Stellar Asset Lists as a second curation source, and why listing is never a safety signal |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
 
 ## Status

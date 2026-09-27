@@ -176,6 +176,16 @@ Consumes StellarExpert's address directory (the data set standardized by
 SEP-0037) and malicious-domain blocklist. A `malicious`/`unsafe` directory tag
 or a blocklist hit escalates to `critical`.
 
+Any configured [SEP-0042 asset list](asset-lists.md) is consumed here too, one
+`Evidence` entry per list, attributed by the list's own name and URL. A list can
+neither escalate nor lower the level: inclusion is not endorsement — the spec
+says so itself — and absence from a list is not an observation. When the lists
+disagree, or disagree with StellarExpert, the report says so and leaves it
+unresolved rather than averaging two providers into one verdict. A list that
+could not be read is recorded as failure evidence rather than as an absence, and
+does not mark the report `undetermined`, because it is not a source the verdict
+depends on.
+
 Everything it produces is `Evidence{Source, URL, Claim, RetrievedAt}` naming
 StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
