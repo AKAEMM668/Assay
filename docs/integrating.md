@@ -31,6 +31,10 @@ makes the trust checkable rather than absolute: it commits to the exact evidence
 the scanner read, and anyone can re-scan and recompute it. See
 [contract-interface.md](contract-interface.md).
 
+For a complete breakdown of every party you are trusting (issuer, attester key,
+Horizon, and reputation providers) and the consequences if each is dishonest or
+wrong, see [trust.md](trust.md).
+
 ## 1. Declare the interface
 
 You do not need a dependency on Assay. Declare the parts you call:
