@@ -88,7 +88,9 @@ pub struct Attested {
     pub severity: u32,
     /// Mechanic bitset written for the asset.
     pub flags: u32,
-    /// Ledger timestamp of the write.
+    /// Ledger timestamp of the write, obtained from `env.ledger().timestamp()`
+    /// (seconds since Unix epoch). Authoritative for all on-chain freshness
+    /// decisions (`is_safe`, `is_safe_masked`). See `docs/timestamps.md`.
     pub attested_at: u64,
 }
 
@@ -106,7 +108,13 @@ pub struct Safety {
     /// hashed are specified by `internal/attest` and reproducible with
     /// `assay attestation -preimage CODE-ISSUER`.
     pub evidence_hash: BytesN<32>,
-    /// Ledger timestamp when this attestation was written.
+    /// Ledger timestamp when this attestation was written, obtained from
+    /// `env.ledger().timestamp()` (seconds since Unix epoch).
+    ///
+    /// This is the authoritative timestamp for all on-chain freshness decisions
+    /// (`is_safe`, `is_safe_masked`). It reflects the consensus ledger close
+    /// time and is independent of off-chain scanner host clocks. See
+    /// `docs/timestamps.md`.
     pub attested_at: u64,
 }
 

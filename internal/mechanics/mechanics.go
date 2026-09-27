@@ -35,9 +35,18 @@ func (a Asset) String() string { return a.Code + "-" + a.Issuer }
 // outside claim by constructing an Evidence with its source and URL, there is
 // no code path that renders someone else's data as an Assay conclusion.
 type Evidence struct {
-	Source      string    `json:"source"`
-	URL         string    `json:"url"`
-	Claim       string    `json:"claim"`
+	Source string `json:"source"`
+	URL    string `json:"url"`
+	Claim  string `json:"claim"`
+	// RetrievedAt is when this specific fact was observed from the source
+	// (or when the attempt was made, if the fetch failed).
+	//
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// When a fetch fails, RetrievedAt carries the attempt time, Attempted is
+	// true, and Claim reads "not retrievable: <reason>". An absent retrieval
+	// time is never represented as a zero timestamp. See docs/timestamps.md.
 	RetrievedAt time.Time `json:"retrieved_at"`
 	// Attempted marks evidence whose RetrievedAt is the time the fetch was
 	// ATTEMPTED, not the time the source answered: the fetch failed, so there
@@ -147,7 +156,18 @@ type Subject struct {
 	// ScannedAt is when the scan started. It is the report-level timestamp:
 	// evidence carries the time of the source it came from, and the report
 	// carries the time the subject assembly began.
+	//
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// Because data sources are fetched sequentially over an outer context
+	// timeout of up to 30 seconds, ScannedAt is an approximation across the
+	// sequential fetch window; individual facts may have been retrieved up
+	// to 30 seconds after ScannedAt. See docs/timestamps.md.
 	ScannedAt time.Time
+	// FetchedAt is a legacy alias for ScannedAt, retained for backwards
+	// compatibility with earlier callers. It is populated with the same
+	// scan start timestamp.
 	FetchedAt time.Time
 }
 
@@ -218,7 +238,17 @@ type Report struct {
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
 	Evidence      []Evidence `json:"evidence"`
-	ScannedAt     time.Time  `json:"scanned_at"`
+	// ScannedAt is when the scan run started (the Subject.ScannedAt timestamp).
+	// It is the report-level timestamp.
+	//
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// Because individual sources are fetched sequentially over an outer context
+	// timeout of up to 30 seconds, ScannedAt is an approximation across the
+	// sequential fetch window; individual Evidence items carry their own
+	// RetrievedAt completion times. See docs/timestamps.md.
+	ScannedAt time.Time `json:"scanned_at"`
 }
 
 // Engine runs a set of checks over a Subject.
