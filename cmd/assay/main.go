@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -29,6 +30,8 @@ func usage() {
 	fmt.Fprint(os.Stderr, `usage:
   assay scan CODE-ISSUER          classify one asset and print the report as JSON
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
+  assay verify [-hash HEX] [-raw] [PREIMAGE]
+                                  check a canonical preimage against an evidence_hash
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr]             serve the HTTP API and UI
@@ -48,6 +51,8 @@ func run(args []string) error {
 		return runScan(args[1:])
 	case "attestation":
 		return runAttestation(args[1:])
+	case "verify":
+		return runVerify(args[1:])
 	case "history":
 		return runHistory(args[1:])
 	case "serve":
@@ -125,6 +130,95 @@ func runAttestation(args []string) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(params)
+}
+
+// runVerify checks a canonical preimage against the evidence_hash an
+// attestation carries on chain.
+//
+// It is the other half of `attestation -preimage`, and it exists because the
+// alternative is two commands and a human comparing 64 hex characters by eye.
+// Nothing here reaches the network: the preimage names its own asset, and the
+// hash either matches these bytes or it does not.
+//
+// The preimage is read from a file, or from stdin when the argument is omitted
+// or `-`, so one that was published elsewhere can be piped straight in:
+//
+//	assay attestation -preimage CODE-ISSUER | jq -r .preimage | assay verify -hash 0x...
+//
+// With no -hash it prints the hash the bytes produce, which is the value to
+// compare against what the registry stores.
+func runVerify(args []string) error {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	hash := fs.String("hash", "", "the evidence_hash to verify against, hex (0x optional)")
+	asset := fs.String("asset", "", "also require the preimage to be for this CODE-ISSUER")
+	raw := fs.Bool("raw", false, "print only the recomputed evidence_hash")
+	quiet := fs.Bool("quiet", false, "print nothing; report the verdict through the exit status")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() > 1 {
+		return fmt.Errorf("verify takes at most one preimage file (use - for stdin)")
+	}
+
+	pre, err := readPreimage(fs.Args())
+	if err != nil {
+		return err
+	}
+
+	v, err := attest.VerifyPreimage(pre, *hash)
+
+	// An unreadable header is a note rather than a failure: the bytes are still
+	// worth hashing, and refusing to would let a cosmetic problem hide a real
+	// mismatch. Notes go to stderr so stdout stays machine-readable.
+	if !*quiet && !*raw {
+		for _, n := range v.Notes {
+			fmt.Fprintln(os.Stderr, "assay verify:", n)
+		}
+	}
+
+	if err != nil {
+		// A mismatch is the one case where both hashes are the whole answer, so
+		// print what was compared before returning the failure.
+		if *raw {
+			fmt.Println(v.Computed)
+		} else if !*quiet {
+			enc := json.NewEncoder(os.Stdout)
+			enc.SetIndent("", "  ")
+			if encErr := enc.Encode(v); encErr != nil {
+				return encErr
+			}
+		}
+		return err
+	}
+
+	if *asset != "" && !strings.EqualFold(v.Asset, *asset) {
+		return fmt.Errorf("preimage is for %q, not %q", v.Asset, *asset)
+	}
+
+	if *raw {
+		fmt.Println(v.Computed)
+		return nil
+	}
+	if *quiet {
+		return nil
+	}
+
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// readPreimage reads the canonical bytes from a file, or from stdin when no
+// file was named or `-` was given.
+//
+// The exact bytes are what the hash covers, so nothing is trimmed or normalised
+// on the way in: doing so would verify a different document from the one the
+// attester published.
+func readPreimage(args []string) ([]byte, error) {
+	if len(args) == 0 || args[0] == "-" {
+		return io.ReadAll(os.Stdin)
+	}
+	return os.ReadFile(args[0])
 }
 
 func runHistory(args []string) error {
