@@ -203,6 +203,11 @@ type Subject struct {
 	FetchedAt time.Time
 }
 
+// ReportSchemaVersion is the current value Report.SchemaVersion marshals as
+// (issue #44). Bump it on any breaking change to the report JSON shape; see
+// the compatibility rule on the field.
+const ReportSchemaVersion = 1
+
 // HomeDomain returns the issuer's advertised home_domain, if any.
 func (s *Subject) HomeDomain() string {
 	if s.Issuer == nil {
@@ -224,6 +229,16 @@ type Check interface {
 
 // Report is the aggregated result of running every check over one asset.
 type Report struct {
+	// SchemaVersion is the version of the report JSON shape (issue #44).
+	// Consumers read it to know which shape they are parsing — the /api/v1 in
+	// the URL is a route namespace, not a payload contract.
+	//
+	// Compatibility rule: ADDITIVE changes (a new optional field, a new enum
+	// member consumers must already tolerate) do NOT bump this value.
+	// REMOVALS, renames, type changes, and semantic changes to an existing
+	// field DO bump it. The current value is 1.
+	SchemaVersion int `json:"schema_version"`
+
 	Asset Asset `json:"asset"`
 
 	// Severity is the final level: the capability base, raised by any
@@ -337,6 +352,7 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		scannedAt = s.FetchedAt
 	}
 	rep := &Report{
+		SchemaVersion:      ReportSchemaVersion,
 		Asset:              s.Asset,
 		Accountability:     AccountabilityUnknown,
 		ScannedAt:          CanonicalTime(scannedAt),
