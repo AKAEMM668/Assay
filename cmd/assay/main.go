@@ -14,6 +14,10 @@ import (
 
 	"github.com/use-assay/assay/internal/api"
 	"github.com/use-assay/assay/internal/attest"
+	// Aliased because this file already has a local history() for the CLI's
+	// evidence view; this package is the persisted observation store behind the
+	// HTTP endpoint, a different thing.
+	historystore "github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 )
@@ -37,6 +41,8 @@ Every command that scans accepts:
   -cache-directory-ttl D   reuse a curated directory answer for D (0 disables)
   -cache-blocklist-ttl D   reuse a blocklist answer for D (0 disables)
   -no-cache                re-fetch curated sources on every scan
+  assay serve [-addr] [-history PATH]
+                                  serve the HTTP API and UI
 `)
 }
 
@@ -283,6 +289,8 @@ func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	cache := cacheFlags(fs)
 	addr := fs.String("addr", ":8080", "listen address")
+	historyPath := fs.String("history", "",
+		"path to the observation history log (JSON Lines); empty keeps history in memory only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -293,8 +301,20 @@ func runServe(args []string, log *slog.Logger) error {
 	srv := &http.Server{
 		Addr:              *addr,
 		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
+	srv := api.NewServer(log)
+	if *historyPath != "" {
+		store, err := historystore.Open(*historyPath)
+		if err != nil {
+			return err
+		}
+		srv.History = store
+	}
+
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Info("assay listening", "addr", *addr)
-	return srv.ListenAndServe()
+	log.Info("assay listening", "addr", *addr, "history", *historyPath)
+	return httpSrv.ListenAndServe()
 }
