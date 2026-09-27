@@ -296,6 +296,33 @@ cost is that the hash cannot distinguish a fresh confirmation from a stale one
 — which is precisely why `attested_at` is stored separately and `is_safe` takes
 `max_age_secs` against it.
 
+**`undetermined` is deliberately excluded too** (decided in #43, unchanged from
+the original design). The argument: an undetermined report can never be
+attested — `attest.FromReport` refuses it with `ErrUndetermined` — so across
+everything that is attestable the flag is constant (`false`) and commits
+nothing. Including it would change no attested hash while adding one more line
+verifiers must reproduce byte-for-byte.
+
+That guarantee rests on the refusal, not on the hash: the invariant is
+enforced in one function (`FromReport`), and the hash is not a second place it
+is enforced. Two consequences worth stating explicitly:
+
+- A verifier must never compare the hash of a report with
+  `undetermined: true` — the preimage of a partial answer is still well-formed
+  bytes. See `TestFromReportStillRefusesUndetermined` in
+  `internal/attest/undetermined_preimage_test.go`, which pins the refusal this
+  argument depends on, and the same rule stated from the operator side in
+  [attestation-run.md](attestation-run.md).
+- A **degraded** scan (a source unreachable, reported as a `not retrievable`
+  evidence claim) already hashes differently from a clean scan, because the
+  evidence lines differ. The exclusion of the flag does not blur that: the
+  degraded report stays attestable-or-not on its own merits, and the flag is
+  the consumer's warning, not the hash's job.
+
+If a future change ever wants undetermined reports to be attestable, the
+exclusion argument collapses and the flag must move into the preimage under a
+`PreimageVersion` bump, with the vectors regenerated.
+
 The version line is inside the hash, so a future encoding change cannot produce
 bytes a verifier would silently compare against v1.
 
@@ -319,6 +346,23 @@ to compare.
 The check-set binding is a v2 rather than an amendment to v1 deliberately: an
 attestation written under v1 omitted the check set entirely, and re-hashing it
 under a changed v1 format would break every existing attestation.
+
+## The JSON report schema version
+
+The JSON report (CLI `scan` output and `GET /api/v1/scan`) carries a
+`schema_version` field as its first member (issue #44). It is the version of
+the **report JSON shape**, not of the evidence preimage — the preimage is
+versioned separately by its `assay-evidence-vN` line, and the `/api/v1` in the
+route path is a URL namespace, not a payload contract.
+
+The compatibility rule: **additive changes do not bump it** — a new optional
+field, or a new enum member a tolerant consumer must already cope with. Any
+**removal, rename, type change, or semantic change to an existing field bumps
+it.** The current value is `1`. `Engine.Run` stamps it into every report it
+produces, so CLI and API output always agree.
+
+Adding the field does not move any `evidence_hash`: the preimage is built from
+named fields read off the `Report` struct, never from its JSON serialization.
 
 ## Not done yet
 
