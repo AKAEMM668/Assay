@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/use-assay/assay/internal/history"
@@ -83,6 +84,18 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if holder != "" {
 		if err := scan.ValidateHolder(holder); err != nil {
 			writeJSON(w, http.StatusBadRequest, errorBody{err.Error()})
+			return
+		}
+	}
+
+	maxAgeParam := r.URL.Query().Get("max_age_secs")
+	if maxAgeParam == "" {
+		maxAgeParam = r.URL.Query().Get("max_age")
+	}
+	if maxAgeParam != "" {
+		secs, err := strconv.ParseInt(maxAgeParam, 10, 64)
+		if err != nil || secs < 0 {
+			writeJSON(w, http.StatusBadRequest, errorBody{"invalid max_age_secs"})
 			return
 		}
 	}
