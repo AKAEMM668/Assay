@@ -27,6 +27,7 @@ with provenance recorded in
 | `SHX` | legitimate | No auth flags **and** `auth_immutable`. Tests that flag-locking is not mistaken for danger. |
 | `XRP` (fchain.io) | legitimate | The unlocked counterpart to SHX: no auth flags, `auth_immutable` **unset**. Capability is clear, but the flag set can still change, so the `mutability` finding must report that without moving severity. |
 | `USDC` (Circle) | **legitimate, uses the flags** | The critical case. A real regulated stablecoin that legitimately uses `auth_revocable`. |
+| `USDZ` (Zeam Money) | **legitimate, uses clawback** | The other critical case. A regulated stablecoin (FSCA-licensed issuer, reciprocal SEP-1) that legitimately uses `auth_clawback_enabled` — the only subject in the set that measures the model's central claim that legitimate clawback is handled fairly. |
 | `BERKSHIRE` (nasdaq.finance) | trap | Impersonation asset with clawback. Confiscation capability *and* confirmed-bad reputation. |
 | `DOGE` (darkpool.digital) | trap | Known scam carrying **no auth flags**. The case that justifies the second axis. |
 
@@ -41,6 +42,7 @@ row on each test run, so the table cannot drift from the code without a red test
 | shx-clear-flagslocked | `SHX` | clear | **clear** | false | verified | `auth_immutable` |
 | xrp-clear-unlocked | `XRP` | clear | **clear** | false | verified | — |
 | usdc-revocable-regulated | `USDC` | medium | **medium** | false | unverified | `auth_revocable`, `domain_unverified` |
+| usdz-clawback-regulated | `USDZ` | high | **high** | false | verified | `auth_revocable`, `auth_clawback_enabled` |
 | berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
 | doge-noflags-scam | `DOGE` | clear | **critical** | true | unverified | `domain_unverified`, `blocklisted` |
 
@@ -141,6 +143,7 @@ Measured per-check output (same fixtures as the table above):
 | shx-clear-flagslocked | clear | clear, `auth_immutable` | verified | clear (escalation axis) |
 | xrp-clear-unlocked | clear | clear | verified | clear (escalation axis) |
 | usdc-revocable-regulated | medium, `auth_revocable` | clear | unverified, `domain_unverified` | clear (escalation axis) |
+| usdz-clawback-regulated | high, `auth_revocable`, `auth_clawback_enabled` | clear | verified | clear (escalation axis) |
 | berkshire-clawback-scam | high, `auth_revocable`, `auth_clawback_enabled` | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-noflags-scam | clear | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 
@@ -176,23 +179,22 @@ movement fail the command.
 
 Stated plainly, because an eval that hides its gaps is marketing.
 
-- **Six subjects.** Enough to pin the judgment boundaries, not enough for a
-  statistical claim. No precision/recall numbers are quoted, because six
+- **Seven subjects.** Enough to pin the judgment boundaries, not enough for a
+  statistical claim. No precision/recall numbers are quoted, because seven
   subjects cannot support them.
-- **No legitimately-clawback-enabled asset.** The set has no confirmed-good
-  regulated issuer that actually uses clawback. Sampling 2,400 live assets
-  (the 2026-08-10 session, [session note](sessions/2026-08-10-mvp-core.md)) found
-  541 clawback-capable ones, but they are dominated by a single tokenized-security
-  issuer and none is independently confirmed legitimate. Until one is in the set,
-  the claim "the model treats legitimate clawback fairly" rests on the model's
-  structure rather than on measurement. This is the most important gap.
-
-  A candidate now exists: `USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR`
-  is clawback-capable, unblocklisted, and passes reciprocal SEP-1 verification —
-  one of five such assets in StellarExpert's top 50 by rating. It is attested on
-  testnet (see [deployment.md](deployment.md)) but is **not** in this set yet, so
-  the gap is narrower than it was and not yet closed. Capturing it as a fixture
-  is the next step.
+- **~~No legitimately-clawback-enabled asset~~ Closed 2026-09-27.**
+  `USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR` (Zeam Money)
+  is now in the set as `usdz-clawback-regulated`: clawback-capable, reciprocal
+  SEP-1 verification passes, StellarExpert directory tag is `issuer` (not
+  malicious), and the issuer is FSCA-licensed. Base severity is `high` from
+  the flag alone, and — critically — it is **not escalated**. That is the
+  measurement the model's central claim rests on. Fixture provenance and the
+  independent-verification evidence are in
+  [`internal/mechanics/testdata/PROVENANCE.md`](../internal/mechanics/testdata/PROVENANCE.md).
+- **Trap coverage still narrow.** The set has no subject exercising
+  `auth_required` as a gating mechanism, and no subject with all four
+  authorization flags set. Adding those needs live traps that actually
+  exhibit those shapes; the two current traps (`BERKSHIRE`, `DOGE`) do not.
 - **No frozen-trustline case.** Nothing exercises assets with unauthorized
   trustlines, where a freeze has actually been used rather than merely enabled.
 - **Fixtures are a snapshot.** Issuers can change flags. Fixtures pin the

@@ -41,9 +41,52 @@ pub struct Safety {
 
 pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool;
+pub fn is_safe_masked(env: Env, asset: Address, forbidden_mask: u32, max_age_secs: u64) -> bool;
 pub fn attest(env: Env, asset: Address, severity: u32, flags: u32, evidence_hash: BytesN<32>) -> Result<(), Error>;
 pub fn init(env: Env, admin: Address) -> Result<(), Error>;
 ```
+
+### Named policy masks for `is_safe_masked`
+
+`is_safe_masked` gates on **which mechanics** are unacceptable rather than on a
+severity ceiling. Severity is a total order; real policies are not — a
+protocol that can tolerate a freeze but never a confiscation would otherwise
+have to gate on `severity <= MEDIUM`, which also excludes `auth_required`
+assets it may be perfectly happy with.
+
+Two named masks are published as the two common policies; a caller may pass
+any `u32`.
+
+| Mask | Bits | When to use |
+| --- | --- | --- |
+| `POLICY_MASK_CONFISCATION_ONLY` | `MECH_CLAWBACK_ENABLED` | You accept freeze-capable assets but never confiscation-capable ones. |
+| `POLICY_MASK_FREEZE_INCLUSIVE` | `MECH_AUTH_REVOCABLE \| MECH_CLAWBACK_ENABLED` | A custody product refusing anything the issuer can act on. |
+
+`is_safe_masked` fails closed on every non-happy path, exactly like `is_safe`:
+never-attested, stale, and any forbidden bit set all return `false`. An empty
+`forbidden_mask` (`0`) still requires an attestation — an unattested asset
+must never read as safe, even for a policy that forbids nothing.
+
+### Attestation events
+
+Every successful `attest` publishes one Soroban event so indexers do not have
+to poll storage. Rejected calls (`InvalidSeverity`, `InconsistentAttestation`,
+unauthorized) publish nothing: observers must never see a write that did not
+happen.
+
+| Topic 0 | Topic 1 | Data |
+| --- | --- | --- |
+| `symbol_short!("attest")` | asset `Address` | `Map<Symbol, Val>` with keys `severity: u32`, `flags: u32`, `attested_at: u64` |
+
+The event is defined with the `#[contractevent]` macro on the `Attested` struct
+in the contract (see `assay-contracts/contracts/safety-registry/src/lib.rs`)
+so the schema is discoverable from the contract spec rather than only from
+this document.
+
+The asset address is a topic rather than a data-map field so an indexer can
+subscribe by asset without decoding every event body. The topic count is two,
+well within the SDK's four-topic limit, and `Symbol` is the required
+topic-0 shape for a filterable label.
 
 Severity values and mechanic bit positions are **ABI** and mirror
 `internal/mechanics` exactly. Do not renumber them.
