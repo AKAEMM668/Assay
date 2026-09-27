@@ -30,6 +30,11 @@ Each directory is one labelled subject for the eval in docs/eval.md.
 | `doge-noflags-scam/stellar.toml.status` | https://darkpool.digital/.well-known/stellar.toml (HTTP 000) |
 | `doge-noflags-scam/blocked.json` | https://api.stellar.expert/explorer/directory/blocked-domains/darkpool.digital |
 | `doge-noflags-scam/directory.json` | https://api.stellar.expert/explorer/directory/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P |
+| `doge-reputation-outage/asset.json` | https://horizon.stellar.org/assets?asset_code=DOGE&asset_issuer=GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P |
+| `doge-reputation-outage/account.json` | https://horizon.stellar.org/accounts/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P |
+| `doge-reputation-outage/stellar.toml.status` | https://darkpool.digital/.well-known/stellar.toml (HTTP 000) |
+| `doge-reputation-outage/blocked.json` | https://api.stellar.expert/explorer/directory/blocked-domains/darkpool.digital |
+| `doge-reputation-outage/directory.err` | https://api.stellar.expert/explorer/directory/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P (HTTP 429) |
 | `xrp-clear-unlocked/asset.json` | https://horizon.stellar.org/assets?asset_code=XRP&asset_issuer=GBXRPL45NPHCVMFFAYZVUVFFVKSIZ362ZXFP7I2ETNQ3QKZMFLPRDTD5 (captured 2026-09-25) |
 | `xrp-clear-unlocked/account.json` | https://horizon.stellar.org/accounts/GBXRPL45NPHCVMFFAYZVUVFFVKSIZ362ZXFP7I2ETNQ3QKZMFLPRDTD5 (captured 2026-09-25) |
 | `xrp-clear-unlocked/stellar.toml` | https://fchain.io/.well-known/stellar.toml (captured 2026-09-25) |
@@ -40,6 +45,13 @@ Each directory is one labelled subject for the eval in docs/eval.md.
 | `usdz-clawback-regulated/stellar.toml` | https://zeam.money/.well-known/stellar.toml (captured 2026-09-27; abridged to the USDZ CURRENCIES entry, the DOCUMENTATION block, and the header — the full file lists many other assets and validators irrelevant to this subject) |
 | `usdz-clawback-regulated/blocked.json` | https://api.stellar.expert/explorer/directory/blocked-domains/zeam.money (captured 2026-09-27) |
 | `usdz-clawback-regulated/directory.json` | https://api.stellar.expert/explorer/directory/GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR (captured 2026-09-27) |
+
+`doge-reputation-outage` is the same real asset as `doge-noflags-scam`, captured
+for the case where a source failed. Its `directory.err` is a deliberate marker,
+not a captured body: it records that the directory was asked and returned an
+error at capture time, so the fixture can express the outage from issue #23
+(see docs/eval.md, "Fixture convention"). The payload files around it are the
+same live captures as the `doge-noflags-scam` rows above.
 
 ### Independent verification for `usdz-clawback-regulated`
 

@@ -63,6 +63,13 @@ func LoadSubject(fixturesDir, dir string) (*mechanics.Subject, error) {
 		s.TomlErr = "status " + strings.TrimSpace(string(st))
 	}
 
+	// Each reputation source has three fixture states, matching the three
+	// states of the live scan: a payload file means the source answered; an
+	// error marker (directory.err, blocked.err) means it was asked and failed;
+	// neither means it was never consulted. The error marker is what lets the
+	// corpus express the regression from issue #23 — an outage that used to be
+	// indistinguishable from "answered, not listed" — because the loader sets
+	// the matching *Err field rather than leaving it empty.
 	s.DirectoryURL = "https://api.stellar.expert/explorer/directory/" + stat.AssetIssuer
 	s.DirectoryAttemptedAt = fixtureTime
 	if _, err := os.Stat(filepath.Join(base, "directory.json")); err == nil {
@@ -72,6 +79,8 @@ func LoadSubject(fixturesDir, dir string) (*mechanics.Subject, error) {
 		}
 		s.Directory = &e
 		s.DirectoryFetchedAt = fixtureTime
+	} else if msg, err := os.ReadFile(filepath.Join(base, "directory.err")); err == nil {
+		s.DirectoryErr = strings.TrimSpace(string(msg))
 	}
 	s.BlockedURL = "https://api.stellar.expert/explorer/directory/blocked-domains/"
 	if acct.HomeDomain != "" {
@@ -85,6 +94,8 @@ func LoadSubject(fixturesDir, dir string) (*mechanics.Subject, error) {
 		}
 		s.Blocked = &b
 		s.BlockedFetchedAt = fixtureTime
+	} else if msg, err := os.ReadFile(filepath.Join(base, "blocked.err")); err == nil {
+		s.BlockedErr = strings.TrimSpace(string(msg))
 	}
 	return s, nil
 }

@@ -154,6 +154,26 @@
         "https://api.stellar.expert/explorer/directory/blocked-domains/darkpool.digital",
         "https://api.stellar.expert/explorer/directory/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P"
       ]
+    },
+    {
+      "fixture": "doge-reputation-outage",
+      "asset": "DOGE-GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P",
+      "label": "degraded",
+      "base_severity": "clear",
+      "severity": "clear",
+      "escalated": false,
+      "undetermined": true,
+      "accountability": "unverified",
+      "mechanics": ["domain_unverified"],
+      "capture_date": "2026-08-10",
+      "notes": "Same real asset as doge-noflags-scam, captured with the StellarExpert directory that carries its malicious tag unavailable. directory.err records the failure; the blocklist endpoint answered blocked=false, so the source that would have escalated is the one that failed. The honest verdict is undetermined, not clear (issue #23).",
+      "source_urls": [
+        "https://horizon.stellar.org/assets?asset_code=DOGE&asset_issuer=GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P",
+        "https://horizon.stellar.org/accounts/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P",
+        "https://darkpool.digital/.well-known/stellar.toml",
+        "https://api.stellar.expert/explorer/directory/blocked-domains/darkpool.digital",
+        "https://api.stellar.expert/explorer/directory/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P"
+      ]
     }
   ]
 }

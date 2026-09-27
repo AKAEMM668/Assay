@@ -50,6 +50,10 @@ func TestEval(t *testing.T) {
 			if rep.Accountability != tc.Accountability {
 				t.Errorf("accountability = %v, want %v", rep.Accountability, tc.Accountability)
 			}
+			if rep.Undetermined != tc.Undetermined {
+				t.Errorf("undetermined = %v, want %v\nwhy this case exists: %s",
+					rep.Undetermined, tc.Undetermined, tc.Why)
+			}
 		})
 	}
 }

@@ -30,21 +30,27 @@ with provenance recorded in
 | `USDZ` (Zeam Money) | **legitimate, uses clawback** | The other critical case. A regulated stablecoin (FSCA-licensed issuer, reciprocal SEP-1) that legitimately uses `auth_clawback_enabled` — the only subject in the set that measures the model's central claim that legitimate clawback is handled fairly. |
 | `BERKSHIRE` (nasdaq.finance) | trap | Impersonation asset with clawback. Confiscation capability *and* confirmed-bad reputation. |
 | `DOGE` (darkpool.digital) | trap | Known scam carrying **no auth flags**. The case that justifies the second axis. |
+| `DOGE` (reputation outage) | **degraded** | The same real scam as the row above, captured with the StellarExpert directory unavailable. Neither legitimate nor trap: the correct answer is **undetermined**, and the subject exists so a source outage can never again be reported as a clean result (issue #23). |
 
 ## Results
 
 Measured output from fixtures captured on 2026-08-10. `TestEval` asserts every
 row on each test run, so the table cannot drift from the code without a red test:
 
-| Subject | Asset | Base | Final | Escalated | Accountability | Mechanics |
-| --- | --- | --- | --- | --- | --- | --- |
-| aqua-clear-verified | `AQUA` | clear | **clear** | false | verified | — |
-| shx-clear-flagslocked | `SHX` | clear | **clear** | false | verified | `auth_immutable` |
-| xrp-clear-unlocked | `XRP` | clear | **clear** | false | verified | — |
-| usdc-revocable-regulated | `USDC` | medium | **medium** | false | unverified | `auth_revocable`, `domain_unverified` |
-| usdz-clawback-regulated | `USDZ` | high | **high** | false | verified | `auth_revocable`, `auth_clawback_enabled` |
-| berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
-| doge-noflags-scam | `DOGE` | clear | **critical** | true | unverified | `domain_unverified`, `blocklisted` |
+| Subject | Asset | Base | Final | Escalated | Undetermined | Accountability | Mechanics |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| aqua-clear-verified | `AQUA` | clear | **clear** | false | false | verified | — |
+| shx-clear-flagslocked | `SHX` | clear | **clear** | false | false | verified | `auth_immutable` |
+| xrp-clear-unlocked | `XRP` | clear | **clear** | false | false | verified | — |
+| usdc-revocable-regulated | `USDC` | medium | **medium** | false | false | unverified | `auth_revocable`, `domain_unverified` |
+| usdz-clawback-regulated | `USDZ` | high | **high** | false | false | verified | `auth_revocable`, `auth_clawback_enabled` |
+| berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | false | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
+| doge-noflags-scam | `DOGE` | clear | **critical** | true | false | unverified | `domain_unverified`, `blocklisted` |
+| doge-reputation-outage | `DOGE` | clear | **clear** | false | **true** | unverified | `domain_unverified` |
+
+The last row is the point of the `Undetermined` column: its severity is the
+capability floor, exactly as if nothing were wrong, and the `true` is what stops
+that floor from being read as a clean answer.
 
 ## What each result proves
 
@@ -91,6 +97,30 @@ work.
 
 This subject is the reason reputation is kept as a separate upward-only axis
 rather than being dropped for purity.
+
+### DOGE, reputation outage — an outage is not a clean result
+
+`base: clear` → `final: clear`, **undetermined**, not escalated.
+
+This is issue #23 as a fixture. It is the same real DOGE trap, but the
+StellarExpert directory — the source carrying its `malicious` tag — was
+unreachable when the subject was captured. The blocklist endpoint *did* answer,
+and answered `blocked: false`.
+
+An earlier scanner would have read that as a clean reputation result and
+reported `clear`, because a missing directory response and a directory response
+of "not listed" produced the same `Subject`. The distinction now lives in the
+fixture itself: `directory.err` marks the source as asked-and-failed, so the
+loader sets `DirectoryErr`, the reputation check marks itself undetermined, and
+the report carries `undetermined: true` with `reputation` named in
+`undetermined_checks`. Severity is **not** inflated to compensate; it stays at
+the capability floor, which is why the report says the floor is a floor rather
+than an answer.
+
+Before the error markers existed this was the one regression in the project's
+history that the labelled set structurally could not express. It can now, and
+if a future change makes an outage render as clear again, `TestEval` and
+`TestEvalPerCheck` both go red.
 
 ### BERKSHIRE — both axes firing
 
@@ -146,11 +176,14 @@ Measured per-check output (same fixtures as the table above):
 | usdz-clawback-regulated | high, `auth_revocable`, `auth_clawback_enabled` | clear | verified | clear (escalation axis) |
 | berkshire-clawback-scam | high, `auth_revocable`, `auth_clawback_enabled` | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-noflags-scam | clear | clear | unverified, `domain_unverified` | critical, `blocklisted` |
+| doge-reputation-outage | clear | clear | unverified, `domain_unverified` | **undetermined** |
 
 The `reputation` column carries the escalation axis: its finding is `clear` with
 `escalation: true` when nothing is flagged, and `critical` with `blocklisted`
 when it is. That is the one check permitted to escalate, and per-check labels
-keep it from hiding a capability error.
+keep it from hiding a capability error. The degraded subject's reputation
+finding is compared against an **undetermined** label rather than a severity,
+because a check that could not conclude makes no severity claim.
 
 ## Cross-version comparison
 
@@ -179,9 +212,10 @@ movement fail the command.
 
 Stated plainly, because an eval that hides its gaps is marketing.
 
-- **Seven subjects.** Enough to pin the judgment boundaries, not enough for a
-  statistical claim. No precision/recall numbers are quoted, because seven
-  subjects cannot support them.
+- **Eight subjects, seven assets.** Enough to pin the judgment boundaries, not
+  enough for a statistical claim. No precision/recall numbers are quoted,
+  because eight subjects cannot support them. (`DOGE` appears twice: once as
+  the live trap, once as the reputation-outage variant.)
 - **~~No legitimately-clawback-enabled asset~~ Closed 2026-09-27.**
   `USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR` (Zeam Money)
   is now in the set as `usdz-clawback-regulated`: clawback-capable, reciprocal
@@ -201,9 +235,41 @@ Stated plainly, because an eval that hides its gaps is marketing.
   judgment, so a live asset's real classification can drift from the fixture's;
   re-capture before citing a specific asset's current state.
 
+## Fixture convention
+
+Every subject is a directory under `internal/mechanics/testdata`. For each
+source the checks consume, the fixture records one of three states, and
+`eval.LoadSubject` maps them to exactly the three states a live scan produces:
+
+| state | on disk | meaning | loader result |
+| --- | --- | --- | --- |
+| **valid** | `stellar.toml`, `directory.json`, `blocked.json` present | the source answered | payload field set (`Toml`, `Directory`, `Blocked`) |
+| **missing** | no file for that source | the source was never consulted | field nil, `*Err` empty |
+| **unavailable** | `stellar.toml.status`, `directory.err`, `blocked.err` present | the source was asked and failed | field nil, `*Err` set to the marker text |
+
+`stellar.toml.status` holds an HTTP status (for example `404`), which the loader
+renders as `"status 404"`. `directory.err` and `blocked.err` hold the failure
+text the live client would have returned, for example
+`stellarexpert: get <url>: status 429`. The marker text is recorded verbatim, so
+it reaches the report's attributed evidence unchanged.
+
+The three states are not cosmetic. **Missing** means "not consulted";
+**unavailable** means "consulted and did not answer". Before `directory.err`
+existed the two were the same `Subject`, which is how an outage was once
+reported as a clean reputation result (#23). A fixture with `directory.err`
+makes the reputation check undetermined, and `TestEval` / `TestEvalPerCheck`
+assert that (`doge-reputation-outage`).
+
+A fixture should carry at most one of a source's three states. If a payload and
+its error marker are both present, the payload wins, matching the existing
+`stellar.toml` precedence.
+
 ## Adding a subject
 
-1. Capture fixtures for the asset and record provenance.
+1. Capture fixtures for the asset and record provenance. If a source failed at
+   capture time, write its error marker (`directory.err`, `blocked.err`) instead
+   of omitting the file, so a later reader can tell an outage from a source that
+   was never consulted.
 2. Add a case to `TestEval` with the expected base, final, escalation, and
    accountability — and a `why` string stating what the case proves. The `why`
    is printed on failure, so a future maintainer learns what they broke.
@@ -231,6 +297,10 @@ Apache-2.0 and upstream payloads remain subject to their providers' terms.
   issuer or domain as malicious or unsafe, or a documented impersonation case
   with corroborating source records. Capability alone is never enough for this
   label.
+- **Degraded** marks a subject captured while a source it depends on was
+  unavailable. It is neither legitimate nor trap: the report is a partial answer
+  (`undetermined: true`), and the subject exists so that an outage is evaluated
+  rather than collapsing into the same result as a clean source.
 - Severity and accountability are measured independently from the label. The
   expected base severity comes from issuer capability; final severity may only
   rise through reputation escalation; accountability records reciprocal SEP-1
