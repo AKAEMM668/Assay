@@ -133,6 +133,9 @@ func CompareVersions(v1, v2 string) int {
 	}
 	return 0
 }
+// ErrStale reports that the report is stale and cannot be attested as fresh.
+// Contract precedent: AttestationStale is error #2 in the example gate.
+var ErrStale = errors.New("attest: report is stale, so it cannot be attested as fresh")
 
 // FromReport derives the attest() arguments for a scan report.
 //
@@ -152,6 +155,18 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 	// preimage entirely.
 	if rep.Severity == mechanics.Unevaluated || rep.Base == mechanics.Unevaluated {
 		return Params{}, fmt.Errorf("%w: capability was never derived from issuer flags", ErrUnevaluated)
+	}
+
+	// A stale report was complete when made, but is older than the freshness
+	// policy window. On-chain gates refuse stale attestations (AttestationStale
+	// is error #2 in the example gate), and FromReport refuses it with a distinct
+	// error so an expired verdict cannot be attested as fresh.
+	if rep.Stale || rep.State == mechanics.StateStale {
+		msg := "verdict is older than freshness policy window"
+		if rep.StaleReason != "" {
+			msg = rep.StaleReason
+		}
+		return Params{}, fmt.Errorf("%w: %s", ErrStale, msg)
 	}
 
 	// A partial scan is refused outright rather than attested with the severity
