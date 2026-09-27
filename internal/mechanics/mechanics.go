@@ -35,10 +35,26 @@ func (a Asset) String() string { return a.Code + "-" + a.Issuer }
 // outside claim by constructing an Evidence with its source and URL, there is
 // no code path that renders someone else's data as an Assay conclusion.
 type Evidence struct {
-	Source      string    `json:"source"`
-	URL         string    `json:"url"`
-	Claim       string    `json:"claim"`
-	RetrievedAt time.Time `json:"retrieved_at"`
+	Source string `json:"source"`
+	// URL is the location the claim is attributed to. It keeps its original
+	// per-path meaning so that no attestation already on chain moves: on a
+	// successful fetch it is the FINAL location, after redirects; on a failed
+	// fetch it is the REQUESTED location, because no final document existed.
+	// RequestedURL carries the other half.
+	URL string `json:"url"`
+	// RequestedURL is the SEP-1 well-known location derived from home_domain —
+	// the URL Assay asked for. It is recorded alongside URL so an auditor can
+	// see whether a claim came from the requested host or from somewhere a
+	// redirect moved it to, which URL alone cannot express. On a failed fetch
+	// it equals URL (the request never produced a final location).
+	//
+	// It is deliberately OUTSIDE the evidence_hash preimage, which renders only
+	// Source/URL/Claim: adding it must not change the hash of a report whose
+	// claim did not change, or every existing attestation would stop
+	// reproducing. A future encoding may bind it; that would be a version bump.
+	RequestedURL string    `json:"requested_url,omitempty"`
+	Claim        string    `json:"claim"`
+	RetrievedAt  time.Time `json:"retrieved_at"`
 	// Attempted marks evidence whose RetrievedAt is the time the fetch was
 	// ATTEMPTED, not the time the source answered: the fetch failed, so there
 	// is no completion time to record. The Claim of such evidence always reads
