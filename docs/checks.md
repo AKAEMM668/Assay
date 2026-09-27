@@ -157,10 +157,50 @@ had been read when it had not. Fixed, with the history in
 The same rule applies to negatives. SEP-0001 permits a currency entry whose only
 field is `toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the
 declaration to a separate file. Such an entry carries no code or issuer, so it
-can never match. Assay does not follow those links yet, so when a toml contains
-them it reports the asset as **unconfirmed** rather than claiming the domain
-failed to name it — overstating a negative is the same class of error as
-overstating a positive. Following those links is not implemented yet.
+can never match inline. Assay **follows those links**, one hop only, and a match
+in a linked document is a claim exactly like an inline one: it sets verified
+accountability and records the document that made the claim as the evidence
+URL.
+
+Following links is bounded. At most `sep1.MaxLinkedDocuments` (8) links are
+followed per issuer, and the bound is reported rather than hidden when it is
+reached. A linked document's own links are not followed, so a cycle cannot make
+the scanner fetch forever. Every linked fetch goes through the same host
+policy, scheme rule (`https`), size cap (`sep1.MaxBody`) and timeout as the main
+document.
+
+The three outcomes that are not a match are kept apart, because overstating a
+negative is the same class of error as overstating a positive:
+
+- **All links read, none names the asset** — a genuine refusal. The domain
+  published a toml and its linked documents, and none claims this code and
+  issuer. This is `unverified`, with reasoning that says the domain has not
+  claimed the asset.
+- **A link could not be read** — unresolved. Whether that document claimed the
+  asset is unknown, so the reasoning keeps the hedge and never claims the domain
+  failed to name it. The evidence records how many linked documents were read
+  and how many were not.
+- **More links than the bound** — unresolved, and the report says the bound was
+  hit. The unread documents may have claimed the asset, so this is not a
+  refusal either.
+
+### Host policy
+
+`home_domain` is attacker-controlled free text that is turned into a URL the
+scanner fetches. While Assay runs as a server — which `assay serve` and the
+deployed API both do — fetching it without a check is a request-forgery
+primitive against whatever the server can reach. Assay therefore **refuses
+non-public hosts**: loopback, private (RFC 1918 / RFC 4193) and link-local
+addresses, the cloud metadata address `169.254.169.254`, and names that cannot
+be public (`localhost`, `*.local`/`*.internal`, a bare single-label hostname).
+The decision and its limits are recorded in
+[threat-model.md](threat-model.md).
+
+A refusal is a decision Assay made, not a source that failed. It is reported as
+attributed evidence the same way a fetch failure is, but the evidence is marked
+`refused` so a consumer can tell "Assay declined to fetch this host" from "the
+host did not answer" without reading the claim text. A refusal is never rendered
+as a source that failed to answer. Per-currency links obey the same policy.
 
 **Cannot conclude:** that a verified issuer is honest. It establishes that a
 named party has published a claim, nothing more. A scammer can register a domain

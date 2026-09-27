@@ -279,11 +279,14 @@ measurable.
   evidence claim — a consumer switching on the JSON `accountability` field
   cannot tell a broken web server from a refused claim. Both appear in this run:
   USDC is a 404, BERKSHIRE is a DNS failure.
-- **Linked currency files are not followed.** A `stellar.toml` may point to a
-  per-currency file rather than inline the entry. Assay reports that as
-  unconfirmed rather than refuted — but the detection counts only entries with a
-  `toml` link and *no* code or issuer. An entry carrying both a link and a code
-  is missed, so the hedge is skipped in a case where it applies.
+- **Linked currency files are followed one hop, up to `sep1.MaxLinkedDocuments`.**
+  A `stellar.toml` may point to a per-currency file rather than inline the
+  entry. Assay follows those links and treats a match in one as a claim; when a
+  link cannot be read, or the bound is reached, the answer stays unresolved
+  rather than being reported as a refusal. The detection still counts only
+  entries with a `toml` link and *no* code or issuer: an entry carrying both a
+  link and a code is treated as inline and its link is not followed, so a mixed
+  entry that delegates without declaring is missed.
 - **A verified domain is weak evidence.** It proves someone published a matching
   claim. Publishing a `stellar.toml` takes ten minutes.
 
