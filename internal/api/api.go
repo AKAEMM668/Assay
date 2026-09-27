@@ -12,6 +12,7 @@ import (
 
 	"github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/horizon"
+	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 	"github.com/use-assay/assay/internal/temporal"
 )
@@ -19,9 +20,16 @@ import (
 //go:embed ui/index.html
 var uiFS embed.FS
 
+// Scanner describes what the API server needs from a scanner.
+type Scanner interface {
+	ScanWithHolder(ctx context.Context, a mechanics.Asset, holder string) (*mechanics.Report, error)
+}
+
 // Server serves scan results and recorded observation history.
 type Server struct {
-	Scanner *scan.Scanner
+// Server serves scan results and recorded observation history.
+type Server struct {
+	Scanner Scanner
 	// History stores one observation per successful scan. It is a pointer so a
 	// caller can replace the default in-memory store with a file-backed one
 	// (history.Open) or with a pre-seeded store in a test.
