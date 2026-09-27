@@ -143,7 +143,7 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 		Mechanics:    rep.MechanicNames,
 		Checks:       checks,
 		EvidenceHash: hex.EncodeToString(sum[:]),
-		ScannedAt:    rep.ScannedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ScannedAt:    rep.ScannedAt.String(), // canonical whole-second UTC (issue #52)
 		Preimage:     pre,
 	}, nil
 }

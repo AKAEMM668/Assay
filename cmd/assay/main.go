@@ -200,7 +200,7 @@ func history(rep *mechanics.Report) []historyEntry {
 			Severity:   rep.Severity.String(),
 			Transition: transition(e.Claim),
 			Reason:     e.Claim,
-			Time:       e.RetrievedAt,
+			Time:       e.RetrievedAt.Time(),
 		})
 	}
 	return hist

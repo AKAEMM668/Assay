@@ -188,15 +188,18 @@ func TestSubjectRecordsPerSourceFetchTimes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if !rep.ScannedAt.Equal(sub.ScannedAt) {
+	if !rep.ScannedAt.Time().Equal(sub.ScannedAt) {
 		t.Errorf("Report.ScannedAt = %s, want the scan start %s",
-			rep.ScannedAt.Format(time.RFC3339Nano), sub.ScannedAt.Format(time.RFC3339Nano))
+			rep.ScannedAt.Time().Format(time.RFC3339Nano), sub.ScannedAt.Format(time.RFC3339Nano))
 	}
+	// Evidence times cross the JSON boundary at the canonical whole-second
+	// precision (issue #52), so the comparison truncates the same way the
+	// NewCanonicalTime conversion in the checks does.
 	want := map[string]time.Time{
-		"horizon":                        sub.StatFetchedAt,
-		"stellar.toml":                   sub.Toml.FetchedAt,
-		"stellar.expert/blocked-domains": sub.BlockedFetchedAt,
-		"stellar.expert/directory":       sub.DirectoryFetchedAt,
+		"horizon":                        sub.StatFetchedAt.Truncate(time.Second),
+		"stellar.toml":                   sub.Toml.FetchedAt.Truncate(time.Second),
+		"stellar.expert/blocked-domains": sub.BlockedFetchedAt.Truncate(time.Second),
+		"stellar.expert/directory":       sub.DirectoryFetchedAt.Truncate(time.Second),
 	}
 	for _, ev := range rep.Evidence {
 		wantAt, ok := want[ev.Source]
@@ -207,9 +210,9 @@ func TestSubjectRecordsPerSourceFetchTimes(t *testing.T) {
 		if ev.Attempted {
 			t.Errorf("success evidence for %s is marked Attempted", ev.Source)
 		}
-		if !ev.RetrievedAt.Equal(wantAt) {
+		if !ev.RetrievedAt.Time().Equal(wantAt) {
 			t.Errorf("%s evidence RetrievedAt = %s, want %s (that source's completion time)",
-				ev.Source, ev.RetrievedAt.Format(time.RFC3339Nano), wantAt.Format(time.RFC3339Nano))
+				ev.Source, ev.RetrievedAt.Time().Format(time.RFC3339Nano), wantAt.Format(time.RFC3339Nano))
 		}
 	}
 }
@@ -281,9 +284,9 @@ func TestSubjectFailureEvidenceCarriesAttemptTime(t *testing.T) {
 		if !ev.Attempted {
 			t.Error("failure evidence is not marked Attempted; an attempt is not an answer")
 		}
-		if !ev.RetrievedAt.Equal(sub.BlockedAttemptedAt) {
-			t.Errorf("failure evidence carries %s, want the attempt time %s",
-				ev.RetrievedAt.Format(time.RFC3339Nano), sub.BlockedAttemptedAt.Format(time.RFC3339Nano))
+		if !ev.RetrievedAt.Time().Equal(sub.BlockedAttemptedAt.Truncate(time.Second)) {
+			t.Errorf("failure evidence carries %s, want the attempt time %s (whole-second canonical, issue #52)",
+				ev.RetrievedAt.Time().Format(time.RFC3339Nano), sub.BlockedAttemptedAt.Truncate(time.Second).Format(time.RFC3339Nano))
 		}
 		if !strings.Contains(ev.Claim, "not retrievable") {
 			t.Errorf("failure evidence claim does not read as a failure: %q", ev.Claim)
