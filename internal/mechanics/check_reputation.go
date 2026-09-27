@@ -3,8 +3,82 @@ package mechanics
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
+
+// AdverseDirectoryTags is the set of StellarExpert directory tags that
+// escalate severity to critical. A listing carrying any of them is an
+// affirmative adverse determination about the issuer, so it raises the level.
+//
+// It is a named, explicit set rather than an inline literal so the vocabulary
+// is a reviewed artifact. A tag outside this set is never silently ignored:
+// run records unrecognised tags as attributed evidence, which is what turns a
+// newly introduced adverse tag into something visible rather than a false
+// negative that never announces itself.
+//
+// Source and capture date. The vocabulary is StellarExpert's own published
+// list, read on 2026-09-27 from both:
+//   - GET https://api.stellar.expert/explorer/directory/tags (the API's "All
+//     Directory tags" response), and
+//   - github.com/stellar-expert/public-directory, "Standard account tags".
+//
+// Of those tags only two have a description asserting abuse or danger —
+// "malicious" ("Account involved in theft/scam/spam/phishing") and "unsafe"
+// ("Obsolete or potentially dangerous account"). Every other tag classifies
+// what the account is (exchange, anchor, issuer, wallet, custodian, personal,
+// sdf, memo-required, airdrop, obsolete-inflation-pool) without asserting it is
+// malicious, so those stay non-escalating. See docs/checks.md.
+var AdverseDirectoryTags = []string{"malicious", "unsafe"}
+
+// descriptiveDirectoryTags is the remainder of StellarExpert's published
+// directory vocabulary: tags that describe what an account is without
+// asserting it is dangerous. They are listed explicitly so an unrecognised tag
+// can be told apart from a known-descriptive one: a known-descriptive tag is
+// expected and needs no report, while an unrecognised tag is surfaced as
+// evidence. Same source and capture date as AdverseDirectoryTags.
+//
+// "obsolete-inflation-pool" appears in the maintainers' repository list; the
+// API response sample omits it, so it is kept here as part of the vocabulary.
+var descriptiveDirectoryTags = []string{
+	"exchange",
+	"anchor",
+	"issuer",
+	"wallet",
+	"custodian",
+	"personal",
+	"sdf",
+	"memo-required",
+	"airdrop",
+	"obsolete-inflation-pool",
+}
+
+// directoryTagKind is how a directory tag bears on severity.
+type directoryTagKind int
+
+const (
+	// directoryTagDescriptive classifies an account without asserting abuse.
+	directoryTagDescriptive directoryTagKind = iota
+	// directoryTagAdverse asserts the account is involved in abuse or is
+	// dangerous, so a listing carrying it escalates.
+	directoryTagAdverse
+	// directoryTagUnknown is outside the documented vocabulary. It never
+	// escalates and is recorded as evidence, so the vocabulary can be updated
+	// deliberately instead of the tag being dropped silently.
+	directoryTagUnknown
+)
+
+// classifyDirectoryTag maps a tag to its kind using the documented vocabulary.
+func classifyDirectoryTag(tag string) directoryTagKind {
+	switch {
+	case slices.Contains(AdverseDirectoryTags, tag):
+		return directoryTagAdverse
+	case slices.Contains(descriptiveDirectoryTags, tag):
+		return directoryTagDescriptive
+	default:
+		return directoryTagUnknown
+	}
+}
 
 // ReputationCheck folds in StellarExpert's curated reputation data.
 //
@@ -26,7 +100,9 @@ func (ReputationCheck) ID() string { return "reputation" }
 func (ReputationCheck) Describe() string {
 	return "Consumes StellarExpert's curated address directory and " +
 		"malicious-domain blocklist as attributed evidence. Escalates to " +
-		"critical on a confirmed listing; never lowers severity."
+		"critical on a confirmed listing; never lowers severity. The " +
+		"escalating directory tags are an explicit, documented set; a tag " +
+		"outside it is recorded as evidence and never escalated."
 }
 
 // Run implements Check.
@@ -44,6 +120,10 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	// separate from "answered, not listed" because collapsing the two is
 	// exactly how a scanner reports an outage as a clean bill of health.
 	var unreachable []string
+	// unrecognised names directory tags outside Assay's documented vocabulary.
+	// They never escalate, but they are recorded so the vocabulary can be
+	// extended deliberately rather than an adverse tag being silently missed.
+	var unrecognised []string
 
 	if s.DirectoryErr != "" {
 		unreachable = append(unreachable, "the curated directory")
@@ -78,11 +158,34 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				s.Directory.Name, s.Directory.Domain, tags),
 			RetrievedAt: s.DirectoryFetchedAt,
 		})
-		for _, tag := range []string{"malicious", "unsafe"} {
+		// Escalation is driven by the named, documented adverse set rather than
+		// an inline literal, so the vocabulary is a reviewed artifact.
+		for _, tag := range AdverseDirectoryTags {
 			if s.Directory.HasTag(tag) {
 				flagged = append(flagged, fmt.Sprintf("the curated directory tags the issuer %q", tag))
 				break
 			}
+		}
+		// A tag outside the documented vocabulary is not silently dropped. An
+		// unrecognised tag could be adverse, and ignoring it would be a false
+		// negative that never announces itself, on the only axis that can raise
+		// a severity. It is recorded as attributed evidence and left
+		// non-escalating, so the vocabulary is extended deliberately rather
+		// than guessed at scan time.
+		for _, tag := range s.Directory.Tags {
+			if classifyDirectoryTag(tag) != directoryTagUnknown {
+				continue
+			}
+			unrecognised = append(unrecognised, tag)
+			f.Evidence = append(f.Evidence, Evidence{
+				Source: "stellar.expert/directory",
+				URL:    s.DirectoryURL,
+				Claim: fmt.Sprintf(
+					"unrecognised directory tag %q: not in Assay's documented vocabulary, "+
+						"so it did not affect severity; review it so the vocabulary can be updated deliberately",
+					tag),
+				RetrievedAt: s.DirectoryFetchedAt,
+			})
 		}
 	}
 
@@ -140,5 +243,9 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		"flags the issuer as malicious. Recorded as attributed evidence only: it " +
 		"does not lower the capability severity, because a named issuer holds the " +
 		"same power over your balance as an anonymous one."
+	if len(unrecognised) > 0 {
+		f.Reasoning += fmt.Sprintf(" The directory also carried tag(s) outside Assay's "+
+			"documented vocabulary, which were recorded but did not escalate: %q.", unrecognised)
+	}
 	return f, nil
 }

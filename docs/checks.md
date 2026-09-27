@@ -176,6 +176,34 @@ Consumes StellarExpert's address directory (the data set standardized by
 SEP-0037) and malicious-domain blocklist. A `malicious`/`unsafe` directory tag
 or a blocklist hit escalates to `critical`.
 
+### The escalating tag set is explicit
+
+The tags that escalate are a named, documented set —
+`mechanics.AdverseDirectoryTags` — not an inline literal, so changing the
+vocabulary is a reviewed decision. StellarExpert's published directory
+vocabulary, captured 2026-09-27 from
+`GET https://api.stellar.expert/explorer/directory/tags` and
+[`github.com/stellar-expert/public-directory`](https://github.com/stellar-expert/public-directory)
+("Standard account tags"), is: `exchange`, `anchor`, `issuer`, `wallet`,
+`custodian`, `malicious`, `unsafe`, `personal`, `sdf`, `memo-required`,
+`airdrop`, `obsolete-inflation-pool`.
+
+Only two of those assert abuse or danger — `malicious` ("Account involved in
+theft/scam/spam/phishing") and `unsafe` ("Obsolete or potentially dangerous
+account") — so only those escalate. Every other tag describes what an account
+*is* (`issuer`, `anchor`, `custodian`, …) without asserting it is malicious,
+and must stay non-escalating. Treating a descriptive tag as adverse would
+punish exactly the well-known, legitimate accounts the directory exists to
+label.
+
+A tag **outside** that vocabulary is handled the way this project handles every
+other unknown: recorded as attributed evidence, and never escalated. Silently
+ignoring it would be a false negative that never announces itself, on the only
+axis that can raise a severity — the next adverse tag StellarExpert introduces
+would simply not be seen. Recording it makes the vocabulary extensible
+deliberately rather than guessed at scan time, and the unrecognised tag appears
+in the report so a reviewer can decide whether it belongs in the adverse set.
+
 Everything it produces is `Evidence{Source, URL, Claim, RetrievedAt}` naming
 StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
