@@ -1,7 +1,11 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::Address as _, testutils::Ledger as _, BytesN, Env};
+use soroban_sdk::{
+    symbol_short,
+    testutils::{Address as _, Events as _, Ledger as _},
+    vec, BytesN, Env, IntoVal, Map, Symbol,
+};
 
 fn setup() -> (Env, SafetyRegistryClient<'static>, Address) {
     let env = Env::default();
@@ -150,6 +154,140 @@ fn init_is_single_shot() {
 
     let err = client.try_init(&other).expect_err("second init must fail");
     assert_eq!(err, Ok(Error::AlreadyInitialized));
+}
+
+/// An empty forbidden_mask must NOT become a blanket allow for unattested
+/// assets. The gate still requires that an attestation exists.
+#[test]
+fn masked_gate_fails_closed_on_unattested_asset() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    assert!(!client.is_safe_masked(&asset, &0, &0));
+    assert!(!client.is_safe_masked(&asset, &u32::MAX, &0));
+}
+
+#[test]
+fn masked_gate_admits_when_no_forbidden_bit_is_set() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    // Freeze-capable but not confiscation-capable.
+    client.attest(&asset, &SEVERITY_MEDIUM, &MECH_AUTH_REVOCABLE, &hash(&env));
+
+    // A policy that only refuses confiscation admits this asset.
+    assert!(client.is_safe_masked(&asset, &POLICY_MASK_CONFISCATION_ONLY, &0));
+    // A freeze-inclusive policy refuses it.
+    assert!(!client.is_safe_masked(&asset, &POLICY_MASK_FREEZE_INCLUSIVE, &0));
+}
+
+#[test]
+fn masked_gate_blocks_confiscation_capable_asset() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    client.attest(
+        &asset,
+        &SEVERITY_HIGH,
+        &(MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED),
+        &hash(&env),
+    );
+
+    assert!(!client.is_safe_masked(&asset, &POLICY_MASK_CONFISCATION_ONLY, &0));
+    assert!(!client.is_safe_masked(&asset, &POLICY_MASK_FREEZE_INCLUSIVE, &0));
+}
+
+#[test]
+fn masked_gate_all_bits_blocks_any_attested_flag() {
+    let (env, client, _) = setup();
+    let clean = Address::generate(&env);
+    let dirty = Address::generate(&env);
+
+    // Zero flags: an all-bits mask admits it (no forbidden bit is set).
+    client.attest(&clean, &SEVERITY_CLEAR, &0, &hash(&env));
+    assert!(client.is_safe_masked(&clean, &u32::MAX, &0));
+
+    // Any flag set: an all-bits mask refuses it.
+    client.attest(&dirty, &SEVERITY_LOW, &MECH_AUTH_REQUIRED, &hash(&env));
+    assert!(!client.is_safe_masked(&dirty, &u32::MAX, &0));
+}
+
+#[test]
+fn masked_gate_stale_attestation_fails_closed() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    env.ledger().set_timestamp(1_000);
+    client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+    assert!(client.is_safe_masked(&asset, &POLICY_MASK_CONFISCATION_ONLY, &600));
+
+    env.ledger().set_timestamp(1_000 + 601);
+    assert!(!client.is_safe_masked(&asset, &POLICY_MASK_CONFISCATION_ONLY, &600));
+
+    // max_age_secs = 0 disables the freshness requirement.
+    assert!(client.is_safe_masked(&asset, &POLICY_MASK_CONFISCATION_ONLY, &0));
+}
+
+/// A successful attest emits one event with topics ("attest", asset) and data
+/// (severity, flags, attested_at). Events published by this contract are
+/// isolated with filter_by_contract so any auth-machinery events elsewhere in
+/// the environment do not confuse the assertion.
+#[test]
+fn attest_emits_event_on_success() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+    env.ledger().set_timestamp(1_234);
+
+    client.attest(&asset, &SEVERITY_MEDIUM, &MECH_AUTH_REVOCABLE, &hash(&env));
+
+    // Data is the Map produced by #[contractevent]: field-name Symbols to
+    // their values. Building it this way makes what a consumer decoding the
+    // event will see explicit.
+    let mut data = Map::<Symbol, soroban_sdk::Val>::new(&env);
+    data.set(Symbol::new(&env, "attested_at"), 1_234u64.into_val(&env));
+    data.set(
+        Symbol::new(&env, "flags"),
+        MECH_AUTH_REVOCABLE.into_val(&env),
+    );
+    data.set(
+        Symbol::new(&env, "severity"),
+        SEVERITY_MEDIUM.into_val(&env),
+    );
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&client.address),
+        vec![
+            &env,
+            (
+                client.address.clone(),
+                (symbol_short!("attest"), asset).into_val(&env),
+                data.into_val(&env),
+            ),
+        ],
+    );
+}
+
+/// A rejected attestation must not publish an event; otherwise observers see
+/// writes that never happened.
+#[test]
+fn attest_publishes_no_event_on_rejection() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    // InvalidSeverity.
+    let _ = client.try_attest(&asset, &(SEVERITY_CRITICAL + 1), &0, &hash(&env));
+    // InconsistentAttestation.
+    let _ = client.try_attest(
+        &asset,
+        &SEVERITY_MEDIUM,
+        &MECH_CLAWBACK_ENABLED,
+        &hash(&env),
+    );
+
+    assert_eq!(
+        env.events().all().filter_by_contract(&client.address),
+        vec![&env, /* empty: rejected attest calls must not emit events */],
+    );
 }
 
 /// attest() requires auth from the admin set at init time. A non-admin
