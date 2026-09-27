@@ -1,5 +1,9 @@
 # `get_safety(asset)`
 
+## API Contract for Scans
+
+The HTTP scan endpoint (`GET /api/v1/scan?asset=CODE-ISSUER`) returns HTTP `200 OK` on successful or degraded scans, accompanied by the `X-Assay-Undetermined` response header (`true` if any source was unreachable, `false` otherwise). API consumers must check this header or the report's `undetermined` field.
+
 The on-chain half of Assay: a Soroban contract another contract can call
 atomically, in the same transaction as the action it protects.
 
