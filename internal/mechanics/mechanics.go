@@ -135,6 +135,8 @@ type Subject struct {
 	// HolderTrustline is the holder's balance entry for this asset. Populated
 	// when Holder is non-empty and the holder holds the asset.
 	// HolderTrustlineErr records why it was not available.
+	// HolderTrustline    *horizon.TrustlineBalance
+	// HolderTrustlineErr records why it was not available.
 	HolderTrustline    *horizon.TrustlineBalance
 	HolderTrustlineErr string
 	// HolderFetchedAt is when Horizon answered the holder /accounts lookup;
@@ -149,6 +151,15 @@ type Subject struct {
 	// carries the time the subject assembly began.
 	ScannedAt time.Time
 	FetchedAt time.Time
+	// Network is the Stellar network every fact in this Subject was read
+	// from, named by the full network passphrase. It is a scan-level fact
+	// for the same reason ScannedAt is: individual checks cannot know it
+	// (checks do no I/O), yet an attestation must commit to which ledger its
+	// facts came from, because the same CODE-ISSUER can exist on two networks
+	// with different flags (#41). An empty Network means the scan never
+	// declared one — reports written before network binding keep hashing
+	// exactly as they did, and preimage versioning handles the rest.
+	Network horizon.Network
 }
 
 // HomeDomain returns the issuer's advertised home_domain, if any.
@@ -199,6 +210,12 @@ type Report struct {
 	// UndeterminedChecks names the checks that could not complete, so a
 	// consumer can see which axis is missing rather than only that one is.
 	UndeterminedChecks []string `json:"undetermined_checks"`
+
+	// Network is the Stellar network the facts were read from, named by the
+	// full network passphrase. It is bound into the evidence preimage from v3
+	// on, so an attestation proves which ledger it describes; empty means the
+	// scan predates network binding and the report keeps its earlier encoding.
+	Network horizon.Network `json:"network,omitempty"`
 
 	// CheckSet is the sorted IDs of the checks the engine that produced this
 	// report actually ran. It is what makes a suppressed check — one removed
@@ -266,6 +283,7 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		Asset:              s.Asset,
 		Accountability:     AccountabilityUnknown,
 		ScannedAt:          s.ScannedAt,
+		Network:            s.Network,
 		CheckSet:           e.CheckIDs(),
 		Findings:           []Finding{},
 		Evidence:           []Evidence{},

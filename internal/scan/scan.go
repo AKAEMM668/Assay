@@ -68,15 +68,60 @@ type Scanner struct {
 	Toml    *sep1.Fetcher
 	Expert  *stellarexpert.Client
 	Engine  *mechanics.Engine
+	// Network is the Stellar network the scan claims to read, named by the
+	// full network passphrase. It is stamped onto every Subject and bound
+	// into the evidence preimage from v3 on.
+	//
+	// Subject assembly cross-checks the claim against the Horizon base URL
+	// and fails closed when they contradict or when neither can name the
+	// network: the same CODE-ISSUER can exist on two networks with different
+	// flags (#41), so a wrong or guessed network name is not a cosmetic
+	// mistake, it is a false attestation.
+	Network horizon.Network
 }
 
-// New returns a Scanner wired to the public production sources.
+// New returns a Scanner wired to the public production sources. The default
+// Horizon endpoint is SDF pubnet, so the scanner declares pubnet; a scan
+// pointed elsewhere must set Network explicitly or Subject fails rather than
+// guessing.
 func New() *Scanner {
 	return &Scanner{
 		Horizon: horizon.New(""),
 		Toml:    sep1.NewFetcher(),
 		Expert:  stellarexpert.New(""),
 		Engine:  mechanics.NewEngine(),
+		Network: horizon.PublicNet,
+	}
+}
+
+// resolveNetwork decides which network a scan is on.
+//
+// Three inputs exist — the declared Network, the Horizon base URL, and
+// nothing — and every combination that cannot name exactly one network is an
+// error rather than a default:
+//
+//   - a known Horizon host with a contradicting declaration is refused, not
+//     silently re-labelled (a misconfigured testnet scan must not attest as
+//     pubnet);
+//   - a custom base URL with no declaration is refused — that host's network
+//     cannot be determined, and guessing is the bug #41 is about;
+//   - an explicit declaration on an unknown host is honoured: private or
+//     stub Horizons are legitimate, and the caller is the authority on which
+//     ledger it points at.
+func (s *Scanner) resolveNetwork() (horizon.Network, error) {
+	derived, deriveErr := s.Horizon.Network()
+	switch {
+	case deriveErr == nil:
+		if s.Network != "" && s.Network != derived {
+			return "", fmt.Errorf("scan: network declared %q but Horizon at %s serves %q",
+				s.Network, s.Horizon.BaseURL, derived)
+		}
+		return derived, nil
+	case s.Network != "":
+		return s.Network, nil
+	default:
+		return "", fmt.Errorf("scan: %w; set Scanner.Network to the passphrase of the ledger Horizon at %s serves",
+			deriveErr, s.Horizon.BaseURL)
 	}
 }
 
@@ -88,7 +133,11 @@ func New() *Scanner {
 // page. When a source is unreachable the failure is recorded verbatim and
 // surfaced, never smoothed into a false negative.
 func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Subject, error) {
-	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC()}
+	network, err := s.resolveNetwork()
+	if err != nil {
+		return nil, err
+	}
+	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC(), Network: network}
 
 	stat, err := s.Horizon.Asset(ctx, a.Code, a.Issuer)
 	if err != nil {
