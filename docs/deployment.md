@@ -13,7 +13,13 @@ pubnet, and nothing here should be read as a claim that it is ready to be.
 | Wasm hash | `c4105b91b3ceae95b5a225c55bc6981b3dcf71d07fdd0ee5c79a21d25edd301b` |
 | Source | [`contracts/safety-registry`](../assay-contracts/contracts/safety-registry) |
 | Admin / attester | `GALIEUOBDLTFJHTVH5E3MT2BMDTQ3PKMX2U6BRXVKLEB7ARFORFNNMVY` |
-| Built with | `stellar` CLI 27.1.0, `soroban-sdk` 27.0.5 |
+| Built with | `stellar` CLI 27.1.0, `soroban-sdk` 27.0.5, `rustc` 1.98.1 (pinned) |
+
+The contracts' Rust toolchain is pinned to `rustc` 1.98.1 in
+[`assay-contracts/rust-toolchain.toml`](../assay-contracts/rust-toolchain.toml),
+so CI and local builds agree on the compiler and a toolchain upgrade is a
+deliberate commit rather than whatever `stable` happens to be. Rebuilds should
+be produced with it.
 
 The worked integration example from [integrating.md](integrating.md) is
 deployed alongside it, wired to the registry above:
