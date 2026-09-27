@@ -178,5 +178,26 @@ func Corpus() []Label {
 				},
 			},
 		},
+		{
+			Dir: "synthetic-reputation-outage",
+			Why: "a degraded scan in the set itself (#111): the blocklist endpoint was " +
+				"consulted and answered 429, expressed by the blocked.err marker rather " +
+				"than by an absent fixture. The reputation finding must be undetermined, " +
+				"the report must carry Undetermined, and severity must stay at the " +
+				"measured capability — never inflated to cover the gap. Before this " +
+				"subject existed, the degraded state could only be built by hand in " +
+				"degraded_test.go, because the loader rendered an outage as a clean " +
+				"absence.",
+			Base:           mechanics.Clear,
+			Severity:       mechanics.Clear,
+			Escalated:      false,
+			Accountability: mechanics.AccountabilityVerified,
+			Checks: map[string]CheckLabel{
+				"capability":  {Severity: mechanics.Clear},
+				"mutability":  {Severity: mechanics.Clear},
+				"sep1-domain": {Severity: mechanics.Clear},
+				"reputation":  {Undetermined: true, Escalation: true},
+			},
+		},
 	}
 }

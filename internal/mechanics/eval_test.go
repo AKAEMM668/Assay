@@ -2,8 +2,13 @@ package mechanics_test
 
 import (
 	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/use-assay/assay/internal/attest"
 	"github.com/use-assay/assay/internal/eval"
 	"github.com/use-assay/assay/internal/mechanics"
 )
@@ -184,4 +189,227 @@ func TestConfiscationImpliesHigh(t *testing.T) {
 			t.Errorf("%s: confiscation-capable but base severity %v < high", tc.Dir, rep.Base)
 		}
 	}
+}
+
+// TestEvalDegradedSubjectIsUndeterminedNotClear is the eval-side regression
+// for #23, expressed from fixtures (#111). The degraded-scan tests above are
+// hand-built subjects because the fixture loader used to render an outage as a
+// clean absence: a missing directory.json was indistinguishable from a source
+// that never answered. With the error-marker convention (directory.err,
+// blocked.err) the labelled set can state the difference itself, and this case
+// pins it:
+//
+//   - the reputation finding is undetermined, not clear — the blocklist was
+//     consulted and answered 429, so "not listed" was never observed;
+//   - the report carries Undetermined and names the reputation check, so a
+//     consumer parsing JSON sees a partial answer, not a clean one;
+//   - severity stays at the measured capability — never inflated to cover the
+//     gap (the failure shape the outage must not be answered with either);
+//   - the report is refused at attest.FromReport, because a partial scan must
+//     never reach the chain.
+func TestEvalDegradedSubjectIsUndeterminedNotClear(t *testing.T) {
+	rep, err := mechanics.NewEngine().Run(context.Background(), loadSubject(t, "synthetic-reputation-outage"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	if !rep.Undetermined {
+		t.Fatal("a degraded scan did not mark the report undetermined")
+	}
+	if len(rep.UndeterminedChecks) != 1 || rep.UndeterminedChecks[0] != "reputation" {
+		t.Fatalf("expected the reputation check named as undetermined, got %v", rep.UndeterminedChecks)
+	}
+	if rep.Severity != mechanics.Clear || rep.Base != mechanics.Clear {
+		t.Fatalf("severity moved to %v (base %v) to compensate for a missing source; "+
+			"it must stay at the measured capability", rep.Severity, rep.Base)
+	}
+
+	var repF *mechanics.Finding
+	for i := range rep.Findings {
+		if rep.Findings[i].Check == "reputation" {
+			repF = &rep.Findings[i]
+			break
+		}
+	}
+	if repF == nil {
+		t.Fatal("no reputation finding in the report")
+	}
+	if !repF.Undetermined {
+		t.Fatal("reputation finding is not marked undetermined; an outage rendered as a clean answer")
+	}
+	if repF.Severity != mechanics.Clear {
+		t.Fatalf("reputation finding severity = %v; an undetermined finding makes no severity claim", repF.Severity)
+	}
+
+	// The failure has to reach the report as attributed evidence with the
+	// underlying status, or the outage is not auditable from the report alone.
+	var found bool
+	for _, e := range rep.Evidence {
+		if e.Source == "stellar.expert/blocked-domains" {
+			found = true
+			if !strings.Contains(e.Claim, "not retrievable") || !strings.Contains(e.Claim, "429") {
+				t.Errorf("blocklist evidence does not carry the failure verbatim: %q", e.Claim)
+			}
+			if !e.Attempted {
+				t.Error("failure evidence is not marked Attempted: an attempt is not an answer")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no attributed evidence for the unreachable blocklist")
+	}
+
+	// And the whole point of the flag: a degraded report must be refused
+	// on-chain rather than attested with the severity it managed to reach.
+	if _, err := attest.FromReport(rep); !errors.Is(err, attest.ErrUndetermined) {
+		t.Fatalf("a degraded eval subject was attestable (err = %v); want ErrUndetermined", err)
+	}
+}
+
+// TestEvalLoaderStates pins the fixture-format semantics the degraded subject
+// depends on, for all three consumed sources: a payload file means the source
+// answered, an error marker means it was consulted and failed, and neither
+// means it was not consulted. If the loader loses any of the three states,
+// every degraded expectation in the corpus becomes vacuous.
+func TestEvalLoaderStates(t *testing.T) {
+	const (
+		fixtures = "testdata"
+		degraded = "synthetic-reputation-outage"
+	)
+
+	t.Run("errored sources set the matching Err field", func(t *testing.T) {
+		s, err := eval.LoadSubject(fixtures, degraded)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		// Only the blocklist is degraded in this fixture; the directory payload
+		// is present, so it must stay an answer.
+		if s.BlockedErr == "" {
+			t.Error("blocked.err marker present but BlockedErr was not set")
+		}
+		if !strings.Contains(s.BlockedErr, "429") {
+			t.Errorf("BlockedErr = %q, want the marker's text verbatim", s.BlockedErr)
+		}
+		if s.DirectoryErr != "" {
+			t.Errorf("directory.json present but DirectoryErr = %q; a payload and an error marker are mutually exclusive", s.DirectoryErr)
+		}
+		if s.Directory == nil {
+			t.Error("directory.json present but not loaded")
+		}
+		if s.TomlErr != "" {
+			t.Errorf("stellar.toml present but TomlErr = %q; a payload and an error marker are mutually exclusive", s.TomlErr)
+		}
+		if s.Toml == nil {
+			t.Error("stellar.toml present but not loaded")
+		}
+		// Attempt times are always set (the fetch was attempted whether or not
+		// it succeeded); completion times only for answered sources.
+		if s.BlockedAttemptedAt.IsZero() {
+			t.Error("errored fetch recorded no attempt time")
+		}
+		if !s.BlockedFetchedAt.IsZero() {
+			t.Error("errored fetch recorded a completion time; only answered sources have one")
+		}
+	})
+
+	// The two other states, exercised per source without adding fixtures:
+	// the corpus's clean subjects cover the valid state (payload present, no
+	// Err set), and a load from a directory with no files at all covers the
+	// missing state, which the loader must represent as no payload AND no
+	// error — the exact pair a hand-built "never consulted" subject carries.
+	t.Run("valid sources carry a payload and no error", func(t *testing.T) {
+		s, err := eval.LoadSubject(fixtures, "aqua-clear-verified")
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		for _, c := range []struct {
+			name string
+			err  string
+		}{
+			{"toml", s.TomlErr},
+			{"directory", s.DirectoryErr},
+			{"blocked", s.BlockedErr},
+		} {
+			if c.err != "" {
+				t.Errorf("%s source errored (%q) in a fixture whose payload is present", c.name, c.err)
+			}
+		}
+		if s.Toml == nil || s.Directory == nil || s.Blocked == nil {
+			t.Errorf("clean subject loaded without every payload: toml=%t directory=%t blocked=%t",
+				s.Toml != nil, s.Directory != nil, s.Blocked != nil)
+		}
+	})
+
+	t.Run("missing sources carry neither payload nor error", func(t *testing.T) {
+		// LoadSubject treats its second argument as relative to the first, so
+		// the scratch corpus goes under a temp root rather than beside the
+		// real fixtures.
+		root := t.TempDir()
+		dir := "scratch-missing-sources"
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		// asset.json and account.json are required; copy them in so the load
+		// reaches the reputation sources rather than failing first.
+		for _, f := range []string{"asset.json", "account.json"} {
+			b, err := os.ReadFile(filepath.Join(fixtures, degraded, f))
+			if err != nil {
+				t.Fatalf("read %s: %v", f, err)
+			}
+			if err := os.WriteFile(filepath.Join(root, dir, f), b, 0o644); err != nil {
+				t.Fatalf("write %s: %v", f, err)
+			}
+		}
+		s, err := eval.LoadSubject(root, dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		for _, c := range []struct {
+			name    string
+			err     string
+			present bool
+		}{
+			{"directory", s.DirectoryErr, s.Directory != nil},
+			{"blocked", s.BlockedErr, s.Blocked != nil},
+		} {
+			if c.err != "" {
+				t.Errorf("%s: no fixture and no marker, but Err = %q", c.name, c.err)
+			}
+			if c.present {
+				t.Errorf("%s: no fixture present, but a payload was loaded", c.name)
+			}
+		}
+	})
+
+	t.Run("an empty error marker is not an error state", func(t *testing.T) {
+		root := t.TempDir()
+		dir := "scratch-blank-marker"
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		for _, f := range []string{"asset.json", "account.json"} {
+			b, err := os.ReadFile(filepath.Join(fixtures, degraded, f))
+			if err != nil {
+				t.Fatalf("read %s: %v", f, err)
+			}
+			if err := os.WriteFile(filepath.Join(root, dir, f), b, 0o644); err != nil {
+				t.Fatalf("write %s: %v", f, err)
+			}
+		}
+		// A blank marker must not become an empty-but-present Err, which the
+		// checks would read as a failure carrying no reason at all.
+		for _, marker := range []string{"directory.err", "blocked.err"} {
+			if err := os.WriteFile(filepath.Join(root, dir, marker), []byte(" \n\t"), 0o644); err != nil {
+				t.Fatalf("write %s: %v", marker, err)
+			}
+		}
+		s, err := eval.LoadSubject(root, dir)
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		if s.DirectoryErr != "" || s.BlockedErr != "" {
+			t.Errorf("a whitespace-only marker produced Err fields: directory=%q blocked=%q",
+				s.DirectoryErr, s.BlockedErr)
+		}
+	})
 }

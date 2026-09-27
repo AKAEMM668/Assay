@@ -40,6 +40,7 @@ Each directory is one labelled subject for the eval in docs/eval.md.
 | `usdz-clawback-regulated/stellar.toml` | https://zeam.money/.well-known/stellar.toml (captured 2026-09-27; abridged to the USDZ CURRENCIES entry, the DOCUMENTATION block, and the header — the full file lists many other assets and validators irrelevant to this subject) |
 | `usdz-clawback-regulated/blocked.json` | https://api.stellar.expert/explorer/directory/blocked-domains/zeam.money (captured 2026-09-27) |
 | `usdz-clawback-regulated/directory.json` | https://api.stellar.expert/explorer/directory/GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR (captured 2026-09-27) |
+| `synthetic-reputation-outage/*` | Not captured. Payload files are copies of `doge-noflags-scam` (2026-08-10); `blocked.err` is a constructed error marker (HTTP 429) added 2026-09-27 — see that directory's README. |
 
 ### Independent verification for `usdz-clawback-regulated`
 
