@@ -44,7 +44,7 @@ the reason to have a check at all is that it knows when that is fine.
 ```sh
 make test     # tests with -race
 make lint     # golangci-lint
-make cover    # coverage report
+make cover    # per-package coverage table, lowest first
 make run      # start the API on :8080
 ```
 
@@ -65,6 +65,28 @@ Never hand-write a severity, a bitset, or an evidence hash into a transaction â€
 see [docs/deployment.md](docs/deployment.md).
 
 Run `make fmt` before committing; CI enforces `gofmt -l` being empty.
+
+### Coverage
+
+Every CI run reports Go coverage per package. Open the run, select the **Go**
+job, and the table is in the job summary under **Go coverage**. It lists the
+lowest coverage first, and packages with no test files are shown rather than
+left out. The same table is printed in the **coverage report** step's log, and
+the raw profile is attached to the run as the `coverage-profile` artifact.
+From the command line:
+
+```sh
+gh run view <run-id> --log | grep coverage
+gh run download <run-id> -n coverage-profile && go tool cover -html=coverage.out
+```
+
+`make cover` prints the same table locally.
+
+Coverage is **reported, not gated**. There is no threshold, so a drop does not
+fail CI. Adopting one is a separate decision
+([#130](https://github.com/use-assay/Assay/issues/130)), and so is adding a
+hosted coverage service. The report is computed in the workflow from `go test`
+output and nothing is sent anywhere else.
 
 ### The merge gate
 
