@@ -23,7 +23,7 @@ import (
 // who re-scans.
 //
 // aqua-mainnet-onchain is the traceability vector: its digest equals the
-// evidence_hash of AQUA's live mainnet attestation
+// evidence_hash of AQUA's testnet attestation for the mainnet asset
 // (tx 1b6bafc1226570b2415299f5531256716f4d8dc489a9784fcd6ea347d0f63f5f,
 // 688453bd22e9b694b9c70659d37526bdae18944645542642008e9d961461a4a9 — see
 // docs/attestation-run.md), so a third-party reimplementation can check itself
@@ -134,8 +134,8 @@ var vectorReports = map[string]func() *mechanics.Report{
 			}
 		})
 	},
-	// Traceable to the live mainnet attestation named above: the digest file
-	// equals the evidence_hash recorded on chain and in docs/attestation-run.md.
+	// Traceable to the testnet attestation for the mainnet asset named above:
+	// the digest file equals the evidence_hash recorded in docs/attestation-run.md.
 	"aqua-mainnet-onchain": func() *mechanics.Report {
 		return report(func(r *mechanics.Report) {
 			r.Evidence = []mechanics.Evidence{
