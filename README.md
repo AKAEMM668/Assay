@@ -64,7 +64,9 @@ carries an explicit, evaluated position on legitimate clawback use. See
 | [docs/contract-interface.md](docs/contract-interface.md) | `get_safety(asset)` design and the `evidence_hash` encoding |
 | [docs/integrating.md](docs/integrating.md) | How your contract calls `get_safety` and gates on both severity and the bitset |
 | [docs/deployment.md](docs/deployment.md) | Deployed addresses, attested assets, transaction hashes |
+| [docs/verifying.md](docs/verifying.md) | How a third party verifies an attestation end to end, without reading the source |
 | [docs/attestation-run.md](docs/attestation-run.md) | Every asset scanned, what each check returned, and what the run exposed about the scanner |
+| [docs/history.md](docs/history.md) | The observation history API: what is retained, for how long, and what an empty history means |
 | [docs/eval.md](docs/eval.md) | Labelled trap/legitimate set and current results |
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
@@ -77,6 +79,9 @@ scans, and the round trip — scan, attest, `get_safety` — is reproducible end
 end: re-checked on 2026-09-17, a fresh scan reproduced the stored `evidence_hash`
 for every attested asset, with the limits recorded in
 [#24](https://github.com/use-assay/Assay/issues/24).
+[docs/verifying.md](docs/verifying.md) is the procedure a third party follows to
+check one of those attestations from scratch, including what a mismatch does and
+does not prove.
 
 Four things are worth knowing before you rely on any of it:
 
