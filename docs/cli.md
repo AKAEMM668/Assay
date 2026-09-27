@@ -14,6 +14,13 @@ usage:
                                   serve the HTTP API and UI
 ```
 
+Commands that scan also accept:
+
+- `-asset-lists URL[,URL...]` — SEP-0042 Stellar Asset Lists to consume, given
+  as a comma-separated list or repeated. **No list is used by default**: nothing
+  is hardcoded as authoritative, and no report changes unless you opt in. See
+  [asset-lists.md](asset-lists.md).
+
 ## assay scan
 
 Scans one asset and prints the full report: the findings, the reasoning behind
