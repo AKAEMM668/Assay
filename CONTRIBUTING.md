@@ -35,6 +35,10 @@ A check is not done when it detects something. It is done when its
    should not be over-flagged.
 4. Record the eval result. **A check whose judgment isn't evaluated against
    that set doesn't ship.**
+5. Run `make eval` and verify the confusion matrix shows agreement for
+   the new subject's severity level and checks. See [Running the
+   evaluation](docs/eval.md#running-the-evaluation) for how to read the
+   output and what a disagreement may mean.
 
 Point 3 is the whole discipline. Any check can find `auth_revocable: true`;
 the reason to have a check at all is that it knows when that is fine.

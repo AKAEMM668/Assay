@@ -1,11 +1,14 @@
-// Command eval records the labelled corpus's classification and compares two
-// recorded runs.
+// Command eval records the labelled corpus's classification, compares
+// two recorded runs, and produces a confusion matrix over the corpus.
 //
-// It exists so a check change that moves verdicts is visible before it merges.
-// Recording writes the per-subject, per-check output under a version identity;
-// comparing diffs two records and reports severity, mechanic and evidence
-// movements separately, so a change that alters many subjects while keeping the
-// aggregate expectations stable cannot pass unremarked.
+// It exists so a check change that moves verdicts is visible before it
+// merges. Recording writes the per-subject, per-check output under a
+// version identity; comparing diffs two records and reports severity,
+// mechanic and evidence movements separately, so a change that alters
+// many subjects while keeping the aggregate expectations stable cannot
+// pass unremarked. The confusion matrix reports agreements and
+// disagreements per severity level and per check, with undetermined as
+// its own outcome class.
 package main
 
 import (
@@ -31,11 +34,13 @@ func run(args []string) error {
 	out := fs.String("out", "", "write a run record to this file")
 	compare := fs.String("compare", "", "compare the current run against a recorded baseline file")
 	strict := fs.Bool("strict", false, "with -compare, exit non-zero when anything moved")
+	confusion := fs.Bool("confusion", false, "print the confusion matrix over the labelled corpus")
+	precisionRecall := fs.Bool("precision-recall", false, "with -confusion, emit precision and recall with a sample-size caveat")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *out == "" && *compare == "" {
-		return fmt.Errorf("nothing to do: pass -out to record a run, or -compare to diff one")
+	if *out == "" && *compare == "" && !*confusion {
+		return fmt.Errorf("nothing to do: pass -out to record a run, -compare to diff one, or -confusion to print the matrix")
 	}
 
 	rec, err := eval.Run(mechanics.NewEngine(), *fixtures)
@@ -61,6 +66,15 @@ func run(args []string) error {
 			return fmt.Errorf("classifier output moved since %s", *compare)
 		}
 	}
+
+	if *confusion {
+		matrix, err := eval.BuildConfusionMatrix(mechanics.NewEngine(), *fixtures)
+		if err != nil {
+			return err
+		}
+		matrix.Print(*precisionRecall)
+	}
+
 	return nil
 }
 

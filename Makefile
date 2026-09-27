@@ -13,7 +13,7 @@ CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 .PHONY: all build test cover lint fmt vet run clean \
 	contract-test contract-lint contract-build \
 	build-contract deploy-testnet attest read verify-gate \
-	eval-record eval-compare
+	eval-record eval-compare eval
 
 all: build
 
@@ -114,6 +114,14 @@ eval-record:
 # movement so it can be read as a report; add STRICT=1 to make movement fail.
 eval-compare:
 	@go run ./cmd/eval -compare docs/eval-baseline.json $(if $(STRICT),-strict,)
+
+# Prints the confusion matrix over the labelled corpus. Shows agreements
+# and disagreements per severity level and per check, with undetermined as
+# its own outcome class. Sample size is printed with every row.
+# Use -precision-recall to see precision/recall (carries a small-sample
+# caveat). Use -confusion alone to omit precision/recall.
+eval:
+	@go run ./cmd/eval -confusion -precision-recall
 
 clean:
 	rm -f $(BINARY) coverage.out coverage.html
