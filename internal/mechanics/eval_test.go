@@ -250,12 +250,6 @@ func TestAccountabilityNeverChangesSeverity(t *testing.T) {
 // on: anything matching ConfiscationMask is at least High.
 func TestConfiscationImpliesHigh(t *testing.T) {
 	eng := mechanics.NewEngine()
-	for _, dir := range []string{
-		"aqua-clear-verified", "shx-clear-flagslocked", "xrp-clear-unlocked",
-		"usdc-revocable-regulated",
-		"berkshire-clawback-scam", "doge-noflags-scam", "doge-disagreeing-sources",
-	} {
-		rep, err := eng.Run(context.Background(), loadSubject(t, dir))
 	for _, tc := range eval.Corpus() {
 		rep, err := eng.Run(context.Background(), loadSubject(t, tc.Dir))
 		if err != nil {
