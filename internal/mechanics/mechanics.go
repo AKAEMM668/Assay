@@ -197,6 +197,21 @@ type Report struct {
 	// Accountability is reported alongside severity, never folded into it.
 	Accountability Accountability `json:"accountability"`
 
+	// State is the overall verdict state of the report:
+	//   - "valid": a fresh, complete verdict.
+	//   - "unknown": a check could not conclude (undetermined or unevaluated).
+	//   - "stale": the verdict was complete when made, but is older than the
+	//     freshness policy window.
+	State State `json:"state"`
+
+	// Stale reports whether this verdict is older than the policy window.
+	// Kept distinct from Undetermined: a stale report was complete when made,
+	// whereas an undetermined report was never complete.
+	Stale bool `json:"stale"`
+
+	// StaleReason explains why the report is considered stale, if set.
+	StaleReason string `json:"stale_reason,omitempty"`
+
 	// Undetermined reports that at least one check could not complete because
 	// a source it depends on was unreachable, so this report is a partial answer.
 	//
@@ -300,15 +315,18 @@ func (e *Engine) CheckIDs() []string {
 //   - ObservationWindowStart/End records the start and end of the observation
 //     window for the scan.
 func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
+	scannedAt := s.ScannedAt
+	if scannedAt.IsZero() && !s.FetchedAt.IsZero() {
+		scannedAt = s.FetchedAt
+	}
 	rep := &Report{
-		Asset:                s.Asset,
-		Accountability:       AccountabilityUnknown,
-		ScannedAt:            s.ScannedAt,
-		CheckSet:             e.CheckIDs(),
-		Findings:             []Finding{},
-		Evidence:             []Evidence{},
-		UndeterminedChecks:   []string{},
-		UndeterminedBySource: make(map[string]int),
+		Asset:              s.Asset,
+		Accountability:     AccountabilityUnknown,
+		ScannedAt:          scannedAt,
+		CheckSet:           e.CheckIDs(),
+		Findings:           []Finding{},
+		Evidence:           []Evidence{},
+		UndeterminedChecks: []string{},
 	}
 
 	totalChecks := len(e.Checks)
@@ -381,6 +399,12 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	}
 	rep.Escalated = rep.Severity > rep.Base
 	rep.MechanicNames = rep.Mechanics.Names()
+
+	if rep.Undetermined || rep.Base == Unevaluated || rep.Severity == Unevaluated {
+		rep.State = StateUnknown
+	} else {
+		rep.State = StateValid
+	}
 
 	sort.SliceStable(rep.Findings, func(i, j int) bool {
 		return rep.Findings[i].Severity > rep.Findings[j].Severity
