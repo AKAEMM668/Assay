@@ -297,6 +297,12 @@ If the hashes differ, it reports the specific disagreeing field and exits non-ze
 
 `assay attestation -preimage` prints the exact bytes hashed, so the check can be reimplemented in any language. The encoding is specified in [contract-interface.md](contract-interface.md).
 
+This is the two-command sketch. [verifying.md](verifying.md) is the full
+procedure: deriving the address for the network, reading the attestation, the
+`undetermined` scan that makes verification impossible rather than failed, and
+the third cause of a mismatch — the verifier's own environment, which is
+[#24](https://github.com/use-assay/Assay/issues/24) and is not fixed yet.
+
 ## Before you rely on this
 
 - It is on **testnet**, not pubnet.
@@ -307,5 +313,9 @@ If the hashes differ, it reports the specific disagreeing field and exits non-ze
   of independent attesters yet.
 - **Nothing refreshes the attestations.** They are exactly as fresh as their
   `attested_at`. Choose a `max_age_secs` you would actually accept.
-- Testnet is periodically reset, and Soroban persistent entries expire if their
-  TTL is not extended. Either will remove these attestations.
+- Testnet is periodically reset, which removes these attestations. The live
+  registry's entries are also archived (see
+  [deployment.md](deployment.md#entry-lifetime)). An archived attestation is
+  restored when read, with its original `attested_at`, and your transaction pays
+  the restore fee. It does **not** read as `None`, so only `max_age_secs`
+  protects you from an old one.

@@ -26,6 +26,17 @@ import (
 // that a verifier would compare against v1 bytes.
 const PreimageVersion = "assay-evidence-v1"
 
+// PreimageVersionCheckSet is the encoding used once a report binds its check
+// set. It adds a `checks` line naming the checks the engine actually ran, so a
+// report produced by an engine with a check removed cannot hash the same as one
+// produced by the full engine.
+//
+// It is a v2 rather than an edit to v1 for the same reason the version line
+// exists: every attestation already on-chain was hashed under v1, and must
+// keep reproducing. A report carrying no bound check set is still written as
+// v1; only reports that ran through an engine with a check set use v2.
+const PreimageVersionCheckSet = "assay-evidence-v2"
+
 // Params is one attest() call: the arguments, and nothing else.
 //
 // Asset is the classic identifier the scanner read. The contract keys on the
@@ -38,9 +49,14 @@ type Params struct {
 	SeverityName string          `json:"severity_name"`
 	Flags        uint32          `json:"flags"`
 	Mechanics    []string        `json:"mechanics"`
-	EvidenceHash string          `json:"evidence_hash"`
-	ScannedAt    string          `json:"scanned_at"`
-	Preimage     string          `json:"preimage,omitempty"`
+	// Checks is the sorted check set the scan ran, and is the set the preimage
+	// binds under v2. It is reported here so an attestation can be checked
+	// against the set a verifier expects without re-reading the report; empty
+	// means pre-binding, which is reported as unknown rather than complete.
+	Checks       []string `json:"checks,omitempty"`
+	EvidenceHash string   `json:"evidence_hash"`
+	ScannedAt    string   `json:"scanned_at"`
+	Preimage     string   `json:"preimage,omitempty"`
 }
 
 // ErrInconsistent reports a report whose severity the contract would reject.
@@ -57,6 +73,10 @@ var ErrUndetermined = errors.New("attest: scan is undetermined, so there is noth
 // exists" apart from "a source was down". Like ErrUndetermined, it means there
 // is nothing to attest.
 var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so there is no severity to attest")
+
+// ErrStale reports that the report is stale and cannot be attested as fresh.
+// Contract precedent: AttestationStale is error #2 in the example gate.
+var ErrStale = errors.New("attest: report is stale, so it cannot be attested as fresh")
 
 // FromReport derives the attest() arguments for a scan report.
 //
@@ -76,6 +96,18 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 	// preimage entirely.
 	if rep.Severity == mechanics.Unevaluated || rep.Base == mechanics.Unevaluated {
 		return Params{}, fmt.Errorf("%w: capability was never derived from issuer flags", ErrUnevaluated)
+	}
+
+	// A stale report was complete when made, but is older than the freshness
+	// policy window. On-chain gates refuse stale attestations (AttestationStale
+	// is error #2 in the example gate), and FromReport refuses it with a distinct
+	// error so an expired verdict cannot be attested as fresh.
+	if rep.Stale || rep.State == mechanics.StateStale {
+		msg := "verdict is older than freshness policy window"
+		if rep.StaleReason != "" {
+			msg = rep.StaleReason
+		}
+		return Params{}, fmt.Errorf("%w: %s", ErrStale, msg)
 	}
 
 	// A partial scan is refused outright rather than attested with the severity
@@ -100,12 +132,16 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 	pre := Preimage(rep)
 	sum := sha256.Sum256([]byte(pre))
 
+	checks := append([]string(nil), rep.CheckSet...)
+	sort.Strings(checks)
+
 	return Params{
 		Asset:        rep.Asset,
 		Severity:     sev,
 		SeverityName: rep.Severity.String(),
 		Flags:        flags,
 		Mechanics:    rep.MechanicNames,
+		Checks:       checks,
 		EvidenceHash: hex.EncodeToString(sum[:]),
 		ScannedAt:    rep.ScannedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		Preimage:     pre,
@@ -123,7 +159,7 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 //	escalated	true|false
 //	mechanics	N
 //	accountability	NAME
-//	checks	ID1,ID2,...
+//	checks	ID,ID,...                (v2 only: checks the engine ran, sorted)
 //	evidence	SOURCE	URL	CLAIM      (one per claim, sorted)
 //
 // Two decisions in here are worth stating outright.
@@ -138,12 +174,14 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 // is_safe takes max_age_secs against attested_at rather than trusting this.
 //
 // Evidence lines are sorted bytewise rather than left in check order, so
-// reordering or adding a check does not change the hash for evidence that did
-// not change.
+// reordering checks does not change the hash for evidence that did not change.
+// Adding or removing a check does change it, by design: the v2 `checks` line
+// binds the check set, so a check removed from the engine cannot hide behind an
+// otherwise identical report.
 func Preimage(rep *mechanics.Report) string {
 	var b strings.Builder
 
-	b.WriteString(PreimageVersion)
+	b.WriteString(preimageVersion(rep))
 	b.WriteByte('\n')
 	line(&b, "asset", rep.Asset.String())
 	line(&b, "severity", strconv.FormatUint(uint64(rep.Severity), 10))
@@ -152,6 +190,15 @@ func Preimage(rep *mechanics.Report) string {
 	line(&b, "mechanics", strconv.FormatUint(uint64(rep.Mechanics), 10))
 	line(&b, "accountability", string(rep.Accountability))
 	line(&b, "checks", strings.Join(rep.Checks, ","))
+
+	// A bound check set is written as its own line so a verifier can name the
+	// checks a report is missing. Reports with no check set omit it entirely,
+	// keeping their bytes identical to the v1 encoding.
+	if len(rep.CheckSet) > 0 {
+		checks := append([]string(nil), rep.CheckSet...)
+		sort.Strings(checks)
+		line(&b, "checks", strings.Join(checks, ","))
+	}
 
 	ev := make([]string, 0, len(rep.Evidence))
 	for _, e := range rep.Evidence {
@@ -164,6 +211,89 @@ func Preimage(rep *mechanics.Report) string {
 	}
 
 	return b.String()
+}
+
+// preimageVersion returns the encoding version a report is written under.
+//
+// A report that binds a check set uses v2; one that does not keeps the exact
+// v1 bytes, so an attestation written before check-set binding still
+// reproduces its hash.
+func preimageVersion(rep *mechanics.Report) string {
+	if len(rep.CheckSet) > 0 {
+		return PreimageVersionCheckSet
+	}
+	return PreimageVersion
+}
+
+// CheckSetStatus describes whether a report's bound check set can be compared
+// against what a verifier expects.
+type CheckSetStatus string
+
+const (
+	// CheckSetUnknown means the report carries no bound check set: it was
+	// produced before check-set binding. It is reported as unknown rather than
+	// failed, because there is nothing to compare — and never as complete.
+	CheckSetUnknown CheckSetStatus = "unknown"
+	// CheckSetComplete means every expected check is present in the report.
+	CheckSetComplete CheckSetStatus = "complete"
+	// CheckSetIncomplete means at least one expected check is absent.
+	CheckSetIncomplete CheckSetStatus = "incomplete"
+)
+
+// CheckSetVerification is the result of comparing a report's bound check set
+// against the set a verifier requires.
+type CheckSetVerification struct {
+	Status CheckSetStatus
+	// Present is the report's bound check set, sorted, or nil when unknown.
+	Present []string
+	// Missing names the expected checks the report does not carry. It is
+	// populated only for an incomplete set, so a verifier can say which check
+	// is absent rather than only that something is.
+	Missing []string
+}
+
+// VerifyCheckSet checks that a report was produced by an engine running at
+// least the expected checks.
+//
+// A report with no bound check set is CheckSetUnknown: it predates check-set
+// binding, so there is nothing to compare, and failing it would reject every
+// historical attestation. A report with a bound set that is missing an
+// expected check is CheckSetIncomplete, with the absent checks named.
+func VerifyCheckSet(rep *mechanics.Report, expected []string) CheckSetVerification {
+	return verifyChecks(rep.CheckSet, expected)
+}
+
+// VerifyParams checks an attestation's bound check set against the set a
+// verifier expects. It is the same check as VerifyCheckSet applied to the
+// derived attest() arguments, so a verifier holding only the params can flag an
+// attestation whose check set is smaller than expected.
+func VerifyParams(p Params, expected []string) CheckSetVerification {
+	return verifyChecks(p.Checks, expected)
+}
+
+func verifyChecks(present, expected []string) CheckSetVerification {
+	if len(present) == 0 {
+		return CheckSetVerification{Status: CheckSetUnknown}
+	}
+	have := make(map[string]bool, len(present))
+	for _, id := range present {
+		have[id] = true
+	}
+	v := CheckSetVerification{
+		Status:  CheckSetComplete,
+		Present: append([]string(nil), present...),
+	}
+	sort.Strings(v.Present)
+	for _, id := range expected {
+		if !have[id] {
+			v.Missing = append(v.Missing, id)
+		}
+	}
+	if len(v.Missing) > 0 {
+		v.Status = CheckSetIncomplete
+		sort.Strings(v.Missing)
+	}
+	return v
 }
 
 // line writes one key/value record.

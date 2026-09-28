@@ -2,186 +2,138 @@ package mechanics_test
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/use-assay/assay/internal/horizon"
+	"github.com/use-assay/assay/internal/eval"
 	"github.com/use-assay/assay/internal/mechanics"
-	"github.com/use-assay/assay/internal/sep1"
-	"github.com/use-assay/assay/internal/stellarexpert"
 )
 
 // loadSubject rebuilds a Subject from captured fixtures, using the same
-// decoders the live fetchers use. Nothing here touches the network.
+// decoders the live fetchers use. The loader lives in internal/eval so this
+// package and the eval command share one implementation, and neither touches
+// the network. See eval.LoadSubject.
 func loadSubject(t *testing.T, dir string) *mechanics.Subject {
 	t.Helper()
-	base := filepath.Join("testdata", dir)
-
-	var stat horizon.AssetStat
-	readJSON(t, filepath.Join(base, "asset.json"), &stat)
-	var acct horizon.Account
-	readJSON(t, filepath.Join(base, "account.json"), &acct)
-
-	// Fixture capture time. A live scan records a separate completion time
-	// per source; a fixture replay has no latency, so every source answers at
-	// the same instant — which is what the capture itself looked like.
-	fetched := time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
-	s := &mechanics.Subject{
-		Asset:           mechanics.Asset{Code: stat.AssetCode, Issuer: stat.AssetIssuer},
-		Stat:            &stat,
-		StatFetchedAt:   fetched,
-		Issuer:          &acct,
-		IssuerFetchedAt: fetched,
-		ScannedAt:       fetched,
-	}
-
-	if acct.HomeDomain != "" {
-		s.TomlURL = sep1.URLFor(acct.HomeDomain)
-		s.TomlAttemptedAt = fetched
-	}
-	if b, err := os.ReadFile(filepath.Join(base, "stellar.toml")); err == nil {
-		doc, err := sep1.Parse(b)
-		if err != nil {
-			t.Fatalf("parse %s stellar.toml: %v", dir, err)
-		}
-		doc.URL = s.TomlURL
-		s.Toml = doc
-	} else if st, err := os.ReadFile(filepath.Join(base, "stellar.toml.status")); err == nil {
-		s.TomlErr = "status " + strings.TrimSpace(string(st))
-	}
-
-	s.DirectoryURL = "https://api.stellar.expert/explorer/directory/" + stat.AssetIssuer
-	s.DirectoryAttemptedAt = fetched
-	if _, err := os.Stat(filepath.Join(base, "directory.json")); err == nil {
-		var e stellarexpert.DirectoryEntry
-		readJSON(t, filepath.Join(base, "directory.json"), &e)
-		s.Directory = &e
-		s.DirectoryFetchedAt = fetched
-	}
-	s.BlockedURL = "https://api.stellar.expert/explorer/directory/blocked-domains/"
-	if acct.HomeDomain != "" {
-		s.BlockedURL += acct.HomeDomain
-	}
-	s.BlockedAttemptedAt = fetched
-	if _, err := os.Stat(filepath.Join(base, "blocked.json")); err == nil {
-		var b stellarexpert.BlockedDomain
-		readJSON(t, filepath.Join(base, "blocked.json"), &b)
-		s.Blocked = &b
-		s.BlockedFetchedAt = fetched
+	s, err := eval.LoadSubject("testdata", dir)
+	if err != nil {
+		t.Fatalf("load %s: %v", dir, err)
 	}
 	return s
 }
 
-func readJSON(t *testing.T, path string, out any) {
-	t.Helper()
-	b, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if err := json.Unmarshal(b, out); err != nil {
-		t.Fatalf("decode %s: %v", path, err)
-	}
-}
-
-// TestEval is the judgment eval. Detecting a flag is deterministic and
-// uninteresting; what these cases measure is whether the severity model
-// separates a trap from a legitimate compliance feature, and whether
-// escalation fires only on reputation.
+// TestEval is the aggregate judgment eval. Detecting a flag is deterministic
+// and uninteresting; what these cases measure is whether the severity model
+// separates a trap from a legitimate compliance feature, and whether escalation
+// fires only on reputation.
 //
-// See docs/eval.md for the labelling rationale for each subject.
+// The labels live in eval.Corpus so the aggregate and per-check evals cannot
+// describe different runs. See docs/eval.md for the labelling rationale.
 func TestEval(t *testing.T) {
-	cases := []struct {
-		dir string
-		// why states what this subject is supposed to prove.
-		why string
-
-		wantBase      mechanics.Severity
-		wantSeverity  mechanics.Severity
-		wantEscalated bool
-		wantAccount   mechanics.Accountability
-	}{
-		{
-			dir:          "aqua-clear-verified",
-			why:          "no auth flags at all: the issuer has no power over holders, and a reciprocal domain confirms who it is",
-			wantBase:     mechanics.Clear,
-			wantSeverity: mechanics.Clear,
-			wantAccount:  mechanics.AccountabilityVerified,
-		},
-		{
-			dir:          "shx-clear-flagslocked",
-			why:          "no auth flags AND auth_immutable: the issuer can never add freeze or clawback later",
-			wantBase:     mechanics.Clear,
-			wantSeverity: mechanics.Clear,
-			wantAccount:  mechanics.AccountabilityVerified,
-		},
-		{
-			dir: "xrp-clear-unlocked",
-			why: "the unlocked counterpart to SHX: no auth flags, but auth_immutable is UNSET, so the " +
-				"issuer may add freeze or clawback later. The mutability finding must report that " +
-				"without moving base severity off clear.",
-			wantBase:     mechanics.Clear,
-			wantSeverity: mechanics.Clear,
-			wantAccount:  mechanics.AccountabilityVerified,
-		},
-		{
-			dir: "usdc-revocable-regulated",
-			why: "a real regulated stablecoin that legitimately uses auth_revocable. It must report " +
-				"freeze-capable (medium) on the strength of the flag alone: not discounted to clear " +
-				"because Circle issues it, and not escalated because nothing flags it.",
-			wantBase:     mechanics.Medium,
-			wantSeverity: mechanics.Medium,
-			// circle.com does not serve a stellar.toml, so the reciprocal claim
-			// genuinely fails. Reported honestly rather than special-cased.
-			wantAccount: mechanics.AccountabilityUnverified,
-		},
-		{
-			dir: "berkshire-clawback-scam",
-			why: "impersonation asset with clawback: capability alone puts it at high, and the curated " +
-				"malicious tag escalates it to critical",
-			wantBase:      mechanics.High,
-			wantSeverity:  mechanics.Critical,
-			wantEscalated: true,
-			wantAccount:   mechanics.AccountabilityUnverified,
-		},
-		{
-			dir: "doge-noflags-scam",
-			why: "the case that justifies keeping reputation as a separate upward-only axis: a known " +
-				"scam asset carrying NO auth flags. Capability is honestly clear, and escalation is " +
-				"the only thing that catches it.",
-			wantBase:      mechanics.Clear,
-			wantSeverity:  mechanics.Critical,
-			wantEscalated: true,
-			wantAccount:   mechanics.AccountabilityUnverified,
-		},
-	}
-
 	eng := mechanics.NewEngine()
-	for _, tc := range cases {
-		t.Run(tc.dir, func(t *testing.T) {
-			s := loadSubject(t, tc.dir)
-			rep, err := eng.Run(context.Background(), s)
+	for _, tc := range eval.Corpus() {
+		t.Run(tc.Dir, func(t *testing.T) {
+			rep, err := eng.Run(context.Background(), loadSubject(t, tc.Dir))
 			if err != nil {
 				t.Fatalf("run: %v", err)
 			}
-			if rep.Base != tc.wantBase {
+			if rep.Base != tc.Base {
 				t.Errorf("base severity = %v, want %v\nwhy this case exists: %s",
-					rep.Base, tc.wantBase, tc.why)
+					rep.Base, tc.Base, tc.Why)
 			}
-			if rep.Severity != tc.wantSeverity {
+			if rep.Severity != tc.Severity {
 				t.Errorf("severity = %v, want %v\nwhy this case exists: %s",
-					rep.Severity, tc.wantSeverity, tc.why)
+					rep.Severity, tc.Severity, tc.Why)
 			}
-			if rep.Escalated != tc.wantEscalated {
-				t.Errorf("escalated = %v, want %v", rep.Escalated, tc.wantEscalated)
+			if rep.Escalated != tc.Escalated {
+				t.Errorf("escalated = %v, want %v", rep.Escalated, tc.Escalated)
 			}
-			if rep.Accountability != tc.wantAccount {
-				t.Errorf("accountability = %v, want %v", rep.Accountability, tc.wantAccount)
+			if rep.Accountability != tc.Accountability {
+				t.Errorf("accountability = %v, want %v", rep.Accountability, tc.Accountability)
 			}
 		})
+	}
+}
+
+// TestEvalPerCheck evaluates each check's output independently (#115).
+//
+// The aggregate can be right for the wrong reason: a capability check that
+// said clear and a reputation escalation that raised the level to critical
+// produce a correct report while the capability error stays invisible. This
+// compares every finding against its own label, so that cannot happen.
+func TestEvalPerCheck(t *testing.T) {
+	eng := mechanics.NewEngine()
+	for _, tc := range eval.Corpus() {
+		t.Run(tc.Dir, func(t *testing.T) {
+			rep, err := eng.Run(context.Background(), loadSubject(t, tc.Dir))
+			if err != nil {
+				t.Fatalf("run: %v", err)
+			}
+			res := eval.EvaluateChecks(rep, tc)
+			if res.Partial {
+				t.Fatalf("subject %s is only partially evaluated: labelled checks with no "+
+					"finding %v, findings with no label %v", tc.Dir, res.Missing, res.Unlabelled)
+			}
+			for _, m := range res.Mismatches {
+				t.Errorf("check %s disagrees: got %s, want %s", m.Check, m.Got, m.Want)
+			}
+			t.Logf("per-check agreement for %s: %v", tc.Dir, res.Agreed)
+		})
+	}
+}
+
+// TestEvalPerCheckDetectsWrongExpectation proves the per-check evaluator
+// actually fails when a check's output diverges from its label, rather than
+// reporting agreement unconditionally.
+func TestEvalPerCheckDetectsWrongExpectation(t *testing.T) {
+	eng := mechanics.NewEngine()
+
+	var doge eval.Label
+	found := false
+	for _, tc := range eval.Corpus() {
+		if tc.Dir == "doge-noflags-scam" {
+			doge, found = tc, true
+		}
+	}
+	if !found {
+		t.Fatal("doge-noflags-scam is missing from the corpus")
+	}
+
+	// Deliberately wrong: DOGE's capability is honestly clear, and this claims
+	// high. A passing evaluator would fail to notice.
+	capability := doge.Checks["capability"]
+	capability.Severity = mechanics.High
+	doge.Checks["capability"] = capability
+
+	rep, err := eng.Run(context.Background(), loadSubject(t, doge.Dir))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	res := eval.EvaluateChecks(rep, doge)
+	if len(res.Mismatches) != 1 || res.Mismatches[0].Check != "capability" {
+		t.Fatalf("a deliberately wrong per-check expectation was not caught: %+v", res)
+	}
+}
+
+// TestEvalPerCheckReportsPartialLabels covers the missing state: a subject
+// without per-check labels must be visibly partial, not silently passing.
+func TestEvalPerCheckReportsPartialLabels(t *testing.T) {
+	eng := mechanics.NewEngine()
+	rep, err := eng.Run(context.Background(), loadSubject(t, "aqua-clear-verified"))
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// No per-check labels at all. An evaluator that only looked at the
+	// aggregate would call this complete.
+	res := eval.EvaluateChecks(rep, eval.Label{Dir: "aqua-clear-verified"})
+	if !res.Partial {
+		t.Fatal("a subject without per-check labels was reported as fully evaluated")
+	}
+	if res.OK() {
+		t.Fatal("OK() returned true for a partially labelled subject")
+	}
+	if len(res.Unlabelled) == 0 {
+		t.Fatal("findings with no label were not reported as unlabelled")
 	}
 }
 
@@ -223,17 +175,13 @@ func TestAccountabilityNeverChangesSeverity(t *testing.T) {
 // on: anything matching ConfiscationMask is at least High.
 func TestConfiscationImpliesHigh(t *testing.T) {
 	eng := mechanics.NewEngine()
-	for _, dir := range []string{
-		"aqua-clear-verified", "shx-clear-flagslocked", "xrp-clear-unlocked",
-		"usdc-revocable-regulated",
-		"berkshire-clawback-scam", "doge-noflags-scam",
-	} {
-		rep, err := eng.Run(context.Background(), loadSubject(t, dir))
+	for _, tc := range eval.Corpus() {
+		rep, err := eng.Run(context.Background(), loadSubject(t, tc.Dir))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if rep.Mechanics&mechanics.ConfiscationMask != 0 && rep.Base < mechanics.High {
-			t.Errorf("%s: confiscation-capable but base severity %v < high", dir, rep.Base)
+			t.Errorf("%s: confiscation-capable but base severity %v < high", tc.Dir, rep.Base)
 		}
 	}
 }
