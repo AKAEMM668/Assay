@@ -60,6 +60,37 @@ make attest ASSET=CODE-ISSUER   # scan live and write the result on-chain
 make read   ASSET=CODE-ISSUER   # read it back with get_safety
 ```
 
+### Contract toolchain
+
+Reproducing a wasm hash recorded in [docs/deployment.md](docs/deployment.md)
+takes the same toolchain the deployment was built with, not just the same
+source. Three versions decide the optimized bytes:
+
+| Component | Recorded build |
+| --- | --- |
+| `stellar` CLI | 27.1.0 |
+| Rust target | `wasm32v1-none` |
+| `soroban-sdk` | 27.0.5 |
+
+The Rust compiler channel is pinned in `assay-contracts/rust-toolchain.toml`
+([#127](https://github.com/use-assay/Assay/issues/127)), so `rustup` reads it
+automatically for anything under `assay-contracts/` and you do not choose a
+toolchain by hand. Verify the environment before any contract work:
+
+```sh
+stellar --version && rustup target list --installed && make build-contract
+```
+
+`stellar --version` must print 27.1.0 and the target list must contain
+`wasm32v1-none`; `make build-contract` then writes the optimized wasm to
+`assay-contracts/out/`. A mismatch on any of the three changes the optimized
+bytes, and therefore the hash, even when the contract source is byte for byte
+identical — the CLI also runs the wasm optimizer and checks the exported
+interface, so it is not a pass-through to `cargo build`. If
+`sha256sum assay-contracts/out/assay_safety_registry.wasm` does not match the
+[recorded wasm hash](docs/deployment.md#live-addresses), check these versions
+before suspecting a source change.
+
 `make attest` derives every value from a live scan via `assay attestation`.
 Never hand-write a severity, a bitset, or an evidence hash into a transaction —
 see [docs/deployment.md](docs/deployment.md).
