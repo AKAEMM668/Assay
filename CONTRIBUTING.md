@@ -20,6 +20,10 @@ them through. If you find yourself writing a scam heuristic over domain
 names, stop — that layer already exists and is better maintained than
 anything we would write.
 
+## Debugging a verdict
+
+If Assay reports something unexpected for an asset, see [docs/debugging-a-verdict.md](docs/debugging-a-verdict.md) for a step-by-step workflow to trace the verdict to its cause and determine whether the discrepancy is in the live source ("the source says so") or in Assay's code.
+
 ## Adding a check
 
 Full guide: [docs/adding-a-check.md](docs/adding-a-check.md).
