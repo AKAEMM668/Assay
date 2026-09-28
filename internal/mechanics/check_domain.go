@@ -47,6 +47,22 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			"published identity to verify against. Nobody has publicly claimed this asset."
 		return f, nil
 	}
+	if domain != "" && s.Directory != nil && s.Directory.Domain != "" && s.Directory.Domain != domain {
+		f.Reasoning = fmt.Sprintf("The issuer advertises home_domain %q, but the curated directory lists it under %q. " +
+			"This discrepancy means accountability is unverified, as it is unclear which domain truly claims this asset.", domain, s.Directory.Domain)
+		acc = AccountabilityUnverified
+		f.Accountability = &acc
+		f.Evidence = append(f.Evidence, Evidence{
+			Source: "home_domain",
+			Claim: domain,
+		})
+		f.Evidence = append(f.Evidence, Evidence{
+			Source: "directory",
+			Claim: s.Directory.Domain,
+		})
+		return f, nil
+	}
+
 
 	if s.Toml == nil {
 		acc = AccountabilityUnverified

@@ -157,3 +157,4 @@ at all and is a known scam.
 
 Assay scans one specific attack surface. It says so rather than implying
 coverage it does not have.
+- [Temporal Trust Model](temporal.md)
