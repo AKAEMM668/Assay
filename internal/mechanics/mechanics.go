@@ -42,6 +42,10 @@ func NewCanonicalTime(t time.Time) CanonicalTime {
 // Time returns the underlying instant.
 func (c CanonicalTime) Time() time.Time { return time.Time(c) }
 
+// IsZero reports whether the instant is the zero time, mirroring
+// time.Time.IsZero for callers that treat a missing stamp as unknown.
+func (c CanonicalTime) IsZero() bool { return c.Time().IsZero() }
+
 // String renders the canonical wire format.
 func (c CanonicalTime) String() string { return c.Time().UTC().Format(TimeFormat) }
 
