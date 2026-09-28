@@ -78,9 +78,9 @@ var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so
 type ProvenanceStatus string
 
 const (
-	ProvenanceValid   ProvenanceStatus = "valid" // ProvenanceValid means the scanner version meets the caller's minimum.
-	ProvenanceInvalid ProvenanceStatus = "invalid" // Version below caller's minimum
-	ProvenanceUnknown ProvenanceStatus = "unknown" // No version recorded (pre-v2 attestation)
+	ProvenanceValid		ProvenanceStatus = "valid"		// ProvenanceValid means the scanner version meets the caller's minimum.
+	ProvenanceInvalid	ProvenanceStatus = "invalid"	// Version below caller's minimum
+	ProvenanceUnknown	ProvenanceStatus = "unknown"	// No version recorded (pre-v2 attestation)
 )
 
 // ErrUnknownProvenance reports an attestation produced without version binding (pre-v2).
@@ -119,10 +119,14 @@ func CompareVersions(v1, v2 string) int {
 	for i := 0; i < maxLen; i++ {
 		var num1, num2 int
 		if i < len(parts1) {
-			num1, _ = strconv.Atoi(parts1[i])
+			if n, err := strconv.Atoi(parts1[i]); err == nil {
+				num1 = n
+			}
 		}
 		if i < len(parts2) {
-			num2, _ = strconv.Atoi(parts2[i])
+			if n, err := strconv.Atoi(parts2[i]); err == nil {
+				num2 = n
+			}
 		}
 		if num1 < num2 {
 			return -1
