@@ -13,6 +13,7 @@ import (
 
 	"github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/horizon"
+	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 	"github.com/use-assay/assay/internal/temporal"
 )
@@ -31,20 +32,30 @@ type Server struct {
 	// pointer so a test can wire the prober to a stub upstream; when nil,
 	// handleReadyz builds one from the server's own clients.
 	Health *HealthProber
-	Log    *slog.Logger
+	// Metrics holds the scan outcome and per-source failure counters served
+	// at GET /metrics. Nil-safe: the handlers treat a nil Metrics as
+	// "nothing counted", never as a crash.
+	Metrics *Metrics
+	Log     *slog.Logger
 }
 
 // NewServer returns a Server backed by the production scanner and an in-memory
 // observation history that does not survive a restart.
 func NewServer(log *slog.Logger) *Server {
-	return &Server{Scanner: scan.New(), History: history.New(), Log: log}
+	return &Server{Scanner: scan.New(), History: history.New(), Metrics: NewMetrics(), Log: log}
 }
 
 // Handler returns the configured HTTP routes.
+//
+// Every route runs through the observability middleware, which assigns the
+// request identifier, records the response status, and gives handlers a
+// per-request logger — the correlation the outcome log line depends on is
+// installed once, here, rather than remembered per handler.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/scan", s.handleScan)
 	mux.HandleFunc("GET /api/v1/history", s.handleHistory)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 	// Liveness and readiness are separate endpoints on purpose: /healthz says
 	// the process is up and checks nothing, /readyz asks the upstreams. A
 	// failing probe must never report healthy; a dying process must still be
@@ -55,7 +66,7 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /", s.handleUI)
-	return mux
+	return s.withObservability(mux)
 }
 
 func (s *Server) handleUI(w http.ResponseWriter, r *http.Request) {
@@ -113,12 +124,22 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	report, err := s.Scanner.ScanWithHolder(ctx, asset, holder)
+
+	// One outcome line per scan, exactly once, with the request identifier
+	// the middleware stamped on this request. The status recorded here is
+	// the one the handler is about to write for this scan — derived by the
+	// same decision the answer below makes, so the log joins against the
+	// access log without guessing.
+	s.logScanOutcome(r.Context(), report, err, s.scanStatusFor(report, err), asset.String())
+
 	if err != nil {
 		if errors.Is(err, horizon.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errorBody{"asset not found on the ledger"})
 			return
 		}
-		s.Log.Error("scan failed", "asset", asset.String(), "err", err)
+		// The per-request logger is used so this line carries the same
+		// request identifier as the outcome line above it.
+		s.loggerFrom(r.Context()).Error("scan failed", "asset", asset.String(), "err", err)
 		// The upstream error is returned rather than a generic message: a user
 		// deciding whether to trust an asset needs to know the difference
 		// between "safe" and "we could not check".
@@ -145,4 +166,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	_ = enc.Encode(v)
+}
+
+// scanStatusFor returns the HTTP status the handler will answer the scan
+// with, from the same decision the handler makes. The outcome line carries
+// it so the log can be joined against the access log without guessing.
+func (s *Server) scanStatusFor(report *mechanics.Report, err error) int {
+	if err != nil {
+		if errors.Is(err, horizon.ErrNotFound) {
+			return http.StatusNotFound
+		}
+		return http.StatusBadGateway
+	}
+	return http.StatusOK
 }
