@@ -213,6 +213,34 @@ attested, stale, too severe, or internally inconsistent.
 The safe answer is the default, so a caller who gets the arguments wrong blocks
 rather than admits.
 
+### A gate reads both severity and the bitset
+
+A gate that copies this example has to check **both** axes. They are not
+redundant, and the reader who takes one for the other is looking at the bug
+that shipped in the example gate.
+
+Severity is a total order and answers *how bad*; the bitset answers *which
+power*. Reputation escalation raises `severity` and sets `blocklisted` and must
+never set a capability bit — capability bits describe what the issuer *can do*,
+and a scam listing is not a capability. So a mask over capability bits cannot
+see escalation, by construction, and a severity ceiling cannot tell a freeze
+from a confiscation.
+
+`DOGE-GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P` (the DOGE
+fixture in the eval corpus) is the concrete counter-example. It is attested at
+severity `4` (`SEVERITY_CRITICAL`) with flags `48`
+(`domain_unverified | blocklisted`) and **no capability bits at all**, because
+its issuer genuinely cannot freeze or confiscate. A gate masking only on
+`MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED` (`6`) computes `48 & 6 == 0` and
+admits a known scam. Only the severity ceiling refuses it.
+
+The numbers are spelled out because the failure is easy to describe and easy to
+miss: `48 & 6 == 0` is exactly zero, and a gate reading a truthful bitset is
+satisfied by it. [integrating.md](integrating.md) works the same case through
+both checks, and the example gate carries the note next to `MAX_SEVERITY`. The
+history of the fix is
+[#26](https://github.com/use-assay/Assay/issues/26).
+
 ### Staleness is the caller's policy
 
 `attested_at` is exposed and `max_age_secs` is a parameter rather than a
