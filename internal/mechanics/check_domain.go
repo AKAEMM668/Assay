@@ -57,10 +57,13 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				"to any value, so an unreachable toml proves nothing about who issued this.",
 			domain, s.TomlErr)
 		f.Evidence = append(f.Evidence, Evidence{
-			Source:      "stellar.toml",
-			URL:         s.TomlURL,
-			Claim:       "not retrievable: " + s.TomlErr,
-			RetrievedAt: s.FetchedAt,
+			Source: "stellar.toml",
+			URL:    s.TomlURL,
+			Claim:  "not retrievable: " + s.TomlErr,
+			// The toml never answered, so this carries the attempt time, not a
+			// retrieval time — and says so programmatically.
+			RetrievedAt: s.TomlAttemptedAt,
+			Attempted:   true,
 		})
 		return f, nil
 	}

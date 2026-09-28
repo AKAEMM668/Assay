@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/use-assay/assay/internal/attest"
 	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/stellarexpert"
@@ -22,13 +23,18 @@ const testIssuer = "GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P"
 // subject builds a Subject with no authorization flags and no home_domain, so
 // capability is Clear and reputation is the only axis in play.
 func subject(mut func(*mechanics.Subject)) *mechanics.Subject {
+	fetched := time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC)
 	s := &mechanics.Subject{
 		Asset:  mechanics.Asset{Code: "DOGE", Issuer: testIssuer},
 		Stat:   &horizon.AssetStat{AssetCode: "DOGE", AssetIssuer: testIssuer},
 		Issuer: &horizon.Account{AccountID: testIssuer},
 
-		DirectoryURL: "https://api.stellar.expert/explorer/directory/" + testIssuer,
-		FetchedAt:    time.Date(2026, 9, 5, 0, 0, 0, 0, time.UTC),
+		DirectoryURL:         "https://api.stellar.expert/explorer/directory/" + testIssuer,
+		DirectoryAttemptedAt: fetched,
+		BlockedAttemptedAt:   fetched,
+		StatFetchedAt:        fetched,
+		IssuerFetchedAt:      fetched,
+		ScannedAt:            fetched,
 	}
 	if mut != nil {
 		mut(s)
@@ -135,6 +141,79 @@ func TestOutageDoesNotInflateSeverity(t *testing.T) {
 	if rep.Base != mechanics.Clear {
 		t.Fatalf("base severity moved to %v; capability was fully readable and must be unaffected", rep.Base)
 	}
+}
+
+// Failure evidence must carry the attempt time of its own source, and must
+// say programmatically that it is an attempt rather than an answer — a consumer
+// must not have to parse the English claim to tell the two apart.
+func TestFailureEvidenceCarriesAttemptTime(t *testing.T) {
+	const attempted = "2026-09-05T00:00:01Z"
+	rep := run(t, subject(func(s *mechanics.Subject) {
+		s.DirectoryErr = "stellarexpert: get x: status 503"
+		s.DirectoryAttemptedAt = mustTime(t, attempted)
+	}))
+
+	var found bool
+	for _, ev := range rep.Evidence {
+		if ev.Source != "stellar.expert/directory" {
+			continue
+		}
+		found = true
+		if !ev.Attempted {
+			t.Error("failure evidence is not marked Attempted: an attempt is not an answer")
+		}
+		if !ev.RetrievedAt.Equal(mustTime(t, attempted)) {
+			t.Errorf("failure evidence carries %s, want the attempt time %s", ev.RetrievedAt, attempted)
+		}
+	}
+	if !found {
+		t.Fatal("no failure evidence for the unreachable directory")
+	}
+}
+
+// Acceptance: evidence_hash for the labelled fixtures is unchanged by this
+// work. Retrieval times are excluded from the preimage, so per-source times
+// must not move it — and if they ever do, the attested assets stop verifying.
+func TestEvidenceHashUnchangedAcrossTheLabelledSet(t *testing.T) {
+	dirs := []string{
+		"aqua-clear-verified", "shx-clear-flagslocked", "usdc-revocable-regulated",
+		"berkshire-clawback-scam", "doge-noflags-scam",
+	}
+	eng := mechanics.NewEngine()
+	for _, dir := range dirs {
+		rep, err := eng.Run(context.Background(), loadSubject(t, dir))
+		if err != nil {
+			t.Fatalf("%s: run: %v", dir, err)
+		}
+		params, err := attest.FromReport(rep)
+		if err != nil {
+			t.Fatalf("%s: FromReport: %v", dir, err)
+		}
+		// Re-deriving the hash with every evidence time shifted far into the
+		// future: identical output is the property under test, because the
+		// preimage commits to claims, not to the clock.
+		for i := range rep.Evidence {
+			rep.Evidence[i].RetrievedAt = rep.Evidence[i].RetrievedAt.Add(100 * 24 * time.Hour)
+		}
+		rep.ScannedAt = rep.ScannedAt.Add(100 * 24 * time.Hour)
+		shifted, err := attest.FromReport(rep)
+		if err != nil {
+			t.Fatalf("%s: FromReport (shifted): %v", dir, err)
+		}
+		if params.EvidenceHash != shifted.EvidenceHash {
+			t.Errorf("%s: retrieval times moved the evidence_hash: %s != %s",
+				dir, params.EvidenceHash, shifted.EvidenceHash)
+		}
+	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		t.Fatalf("parse %q: %v", s, err)
+	}
+	return at
 }
 
 // A malicious listing that did arrive still decides the question. Evidence of

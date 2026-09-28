@@ -162,6 +162,13 @@ mask. Every capability bit does have a severity, so for the assets in the table
 above the mask appears to subsume it — right up to an asset like DOGE whose
 severity comes from somewhere the mask cannot see.
 
+On choosing `MAX_ATTESTATION_AGE`: [freshness.md](freshness.md) measures how
+often issuer flags actually change, names the use classes that need different
+windows, and marks every recommended number as a provisional default. Read it
+before picking a value — the short version is that a day is defensible for a
+custodial deposit gate, a fresh scan beats a cached attestation for one-shot
+settlements, and no window survives without a re-attestation path behind it.
+
 Then call it before you act, in the same transaction:
 
 ```rust
@@ -188,6 +195,7 @@ if !registry.is_safe(&asset, &2, &3600) {
 
 `max_age_secs = 0` disables the freshness check. Pass it only if you have
 decided that staleness is acceptable, not to make a test go green.
+[freshness.md](freshness.md) is the guidance for every other value.
 
 ## 4. Deploy against the live registry
 
@@ -296,6 +304,12 @@ If the hashes differ, either the asset's sources changed since the attestation
 or the attestation does not correspond to the evidence it claims. The hash
 cannot tell you which — that is what `attested_at` and your own re-scan are for.
 
+This is the two-command sketch. [verifying.md](verifying.md) is the full
+procedure: deriving the address for the network, reading the attestation, the
+`undetermined` scan that makes verification impossible rather than failed, and
+the third cause of a mismatch — the verifier's own environment, which is
+[#24](https://github.com/use-assay/Assay/issues/24) and is not fixed yet.
+
 ## Before you rely on this
 
 - It is on **testnet**, not pubnet.
@@ -306,5 +320,9 @@ cannot tell you which — that is what `attested_at` and your own re-scan are fo
   of independent attesters yet.
 - **Nothing refreshes the attestations.** They are exactly as fresh as their
   `attested_at`. Choose a `max_age_secs` you would actually accept.
-- Testnet is periodically reset, and Soroban persistent entries expire if their
-  TTL is not extended. Either will remove these attestations.
+- Testnet is periodically reset, which removes these attestations. The live
+  registry's entries are also archived (see
+  [deployment.md](deployment.md#entry-lifetime)). An archived attestation is
+  restored when read, with its original `attested_at`, and your transaction pays
+  the restore fee. It does **not** read as `None`, so only `max_age_secs`
+  protects you from an old one.

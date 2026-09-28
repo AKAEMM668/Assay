@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -34,6 +35,14 @@ const version = "v0.1.0"
 // API. It is a courtesy to the operators of sources Assay depends on and makes
 // automated traffic distinguishable from botnets and scanners.
 const defaultUserAgent = "assay/" + version + " (+https://github.com/use-assay/Assay)"
+
+// MaxBody caps a curated-endpoint response. Real responses are a few KB; like
+// the SEP-1 toml cap this stops a broken or hostile server from streaming an
+// unbounded body at the scanner. The decode reads at most this many bytes, so
+// an oversized document is truncated and then fails to decode rather than
+// allocating without bound. It is exported so the resource-exhaustion tests
+// can assert the bound rather than assume it.
+const MaxBody = 1 << 20 // 1 MiB
 
 // DirectoryEntry is a curated entry from StellarExpert's address directory,
 // the data set standardized by SEP-0037.
@@ -150,7 +159,11 @@ func (c *Client) get(ctx context.Context, target string, out any) (bool, error) 
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("stellarexpert: get %s: status %d", target, resp.StatusCode)
 	}
-	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody))
+	if err != nil {
+		return false, fmt.Errorf("stellarexpert: read %s: %w", target, err)
+	}
+	if err := json.Unmarshal(body, out); err != nil {
 		return false, fmt.Errorf("stellarexpert: decode %s: %w", target, err)
 	}
 	return true, nil

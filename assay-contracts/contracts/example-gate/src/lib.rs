@@ -82,6 +82,13 @@ pub const MAX_SEVERITY: u32 = 2;
 /// Twenty-four hours is this contract's policy, not Assay's. The registry
 /// exposes `attested_at` and takes the tolerance as a parameter precisely
 /// because a deposit gate and a large settlement should not be forced to agree.
+///
+/// The derivation lives in `docs/freshness.md`: measured issuer-flag change
+/// rates (zero among attested legitimate issuers over six months, month-scale
+/// churn demonstrated on a scam issuer), the use classes that need different
+/// windows, and the caveat that all ten live attestations are already past
+/// this constant — a window without a re-attestation path behind it is a
+/// countdown, and this example has no refresher.
 pub const MAX_ATTESTATION_AGE: u64 = 24 * 60 * 60;
 
 // ---------------------------------------------------------------------------

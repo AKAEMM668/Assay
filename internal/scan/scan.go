@@ -88,44 +88,61 @@ func New() *Scanner {
 // page. When a source is unreachable the failure is recorded verbatim and
 // surfaced, never smoothed into a false negative.
 func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Subject, error) {
-	sub := &mechanics.Subject{Asset: a, FetchedAt: time.Now().UTC()}
+	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC()}
 
 	stat, err := s.Horizon.Asset(ctx, a.Code, a.Issuer)
 	if err != nil {
 		return nil, err
 	}
 	sub.Stat = stat
+	// Each fetch stamps its own completion time. Later temporal statements —
+	// how stale one source's answer was relative to another's — are only
+	// honest if the times were recorded per source, not reused from the scan
+	// start.
+	sub.StatFetchedAt = time.Now().UTC()
 
 	issuer, err := s.Horizon.Account(ctx, a.Issuer)
 	if err != nil {
 		return nil, err
 	}
 	sub.Issuer = issuer
+	sub.IssuerFetchedAt = time.Now().UTC()
 
 	if domain := issuer.HomeDomain; domain != "" {
 		sub.TomlURL = sep1.URLFor(domain)
+		attempted := time.Now().UTC()
 		doc, err := s.Toml.Fetch(ctx, domain)
 		if err != nil {
 			sub.TomlErr = err.Error()
+			// A failed fetch has no completion time, so the attempt time is
+			// what failure evidence carries — explicitly labelled as an attempt
+			// by Evidence.Attempted.
+			sub.TomlAttemptedAt = attempted
 		} else {
 			sub.Toml = doc
 		}
 
 		sub.BlockedURL = s.Expert.BlockedDomainURL(domain)
+		attempted = time.Now().UTC()
 		blocked, err := s.Expert.BlockedDomain(ctx, domain)
+		sub.BlockedAttemptedAt = attempted
 		if err != nil {
 			sub.BlockedErr = err.Error()
 		} else {
 			sub.Blocked = blocked
+			sub.BlockedFetchedAt = time.Now().UTC()
 		}
 	}
 
 	sub.DirectoryURL = s.Expert.DirectoryURL(a.Issuer)
+	attempted := time.Now().UTC()
 	entry, err := s.Expert.Directory(ctx, a.Issuer)
+	sub.DirectoryAttemptedAt = attempted
 	if err != nil {
 		sub.DirectoryErr = err.Error()
 	} else {
 		sub.Directory = entry
+		sub.DirectoryFetchedAt = time.Now().UTC()
 	}
 
 	return sub, nil
@@ -154,11 +171,16 @@ func (s *Scanner) SubjectWithHolder(ctx context.Context, a mechanics.Asset, hold
 	sub.Holder = holder
 	tl, err := s.Horizon.Trustline(ctx, holder, a.Code, a.Issuer)
 	if errors.Is(err, horizon.ErrNotFound) {
-		// Holder does not hold the asset; HolderTrustline stays nil with no error.
+		// Holder does not hold the asset; HolderTrustline stays nil with no
+		// error. The source did answer — "not listed" — so this records a
+		// completion time, not an attempt time.
+		sub.HolderFetchedAt = time.Now().UTC()
 	} else if err != nil {
 		sub.HolderTrustlineErr = err.Error()
+		sub.HolderAttemptedAt = time.Now().UTC()
 	} else {
 		sub.HolderTrustline = tl
+		sub.HolderFetchedAt = time.Now().UTC()
 	}
 	return sub, nil
 }
