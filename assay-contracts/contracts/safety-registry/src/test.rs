@@ -343,11 +343,13 @@ fn transfer_before_init_fails() {
 
 #[test]
 fn accept_without_pending_admin_fails() {
-    let (env, client, _) = setup();
+    let (_env, client, _) = setup();
     let err = client
         .try_accept_admin()
         .expect_err("accept without pending transfer must fail");
     assert_eq!(err, Ok(Error::NoPendingAdmin));
+}
+
 // ---------------------------------------------------------------------------
 // Revocation (#86)
 // ---------------------------------------------------------------------------

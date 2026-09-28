@@ -218,7 +218,7 @@ func TestSubjectRecordsPerSourceFetchTimes(t *testing.T) {
 func TestTimeout(t *testing.T) {
 	fs := newFakeSources(t)
 	// Slow toml server delays 200ms
-	fs.toml.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	fs.toml.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(200 * time.Millisecond)
 		_, _ = w.Write([]byte("[[CURRENCIES]]\ncode=\"USDC\"\nissuer=\"" + scanIssuer + "\"\n"))
 	})

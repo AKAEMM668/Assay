@@ -155,7 +155,7 @@ pub enum Error {
     /// gate can rely on the invariant at read time.
     InconsistentAttestation = 4,
     /// No pending admin transfer exists to accept.
-    NoPendingAdmin = 5,
+    NoPendingAdmin = 6,
     /// `revoke` was called for an asset with no attestation in storage.
     /// Returned rather than treated as a no-op so a revocation aimed at the
     /// wrong address fails loudly instead of reporting success while the
