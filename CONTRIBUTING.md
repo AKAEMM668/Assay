@@ -128,6 +128,65 @@ Tests must not require network access. Fetchers are interfaces; tests use
 fixtures captured from real responses under `internal/*/testdata/`. When you
 capture a new fixture, note the date and the URL it came from.
 
+### The reproducibility job
+
+`.github/workflows/reproducibility.yml` recomputes the `evidence_hash` for
+the ten attested assets by scanning them live and diffs each fresh hash
+against the table in `docs/deployment.md`. The logic lives in
+`scripts/reproducibility.sh` so it can be run locally exactly as CI runs it.
+It is the regression test for [#24](https://github.com/use-assay/Assay/issues/24):
+three of the ten on-chain hashes embed host-specific transport error text,
+so until #24 is fixed the job is expected to report mismatches from any
+machine whose DNS resolver differs from the attester's.
+
+It runs weekly (`cron: 0 6 * * 1`) and on demand (`workflow_dispatch`):
+
+```sh
+gh workflow run reproducibility.yml && gh run watch
+```
+
+It is deliberately **not on the PR path and never gates merges**. It depends
+on live third-party sources — Horizon, StellarExpert, issuer `stellar.toml`
+hosts — so running it per-PR would make CI flaky for reasons unrelated to
+the change under review. An upstream outage must not turn a contributor's
+green PR red, and a scanner change must not be judged by what the live
+network happened to answer that hour. The merge gate above is the per-PR
+check; this job is the scheduled detector.
+
+Semantics, matching the script's exit codes:
+
+- **valid (exit 0)** — every fresh hash matches: pass.
+- **invalid (exit 1)** — a genuine mismatch fails and names the asset with
+  both hashes (`MISMATCH ASSET expected … actual …`).
+- **unknown (exit 2)** — a scan that returns undetermined, or any scan error
+  such as an unreachable source, is reported as **inconclusive**, never as a
+  pass and never as a hard failure. An upstream outage is not a
+  reproducibility bug. GitHub has no neutral job conclusion, so the workflow
+  records inconclusive as a warning with a green check; the step summary
+  says `INCONCLUSIVE`, not `PASS`.
+- **stale — n/a.** The hash commits to what the sources claimed, not to when
+  they were asked, so attestation age is irrelevant to this comparison.
+  Freshness policy lives in [docs/freshness.md](docs/freshness.md).
+
+Run it locally before relying on a scheduled result:
+
+```sh
+go build -o assay ./cmd/assay
+./scripts/reproducibility.sh
+```
+
+Exercise the inconclusive path by pointing a source at an unreachable
+address (supported via `ASSAY_HORIZON_URL` / `ASSAY_STELLAREXPERT_URL`, which
+`internal/scan` reads; empty means the public default):
+
+```sh
+ASSAY_STELLAREXPERT_URL=http://127.0.0.1:1 ./scripts/reproducibility.sh --attempts 1 --delay 0
+# expect: exit 2, every asset INCONCLUSIVE with "scan is undetermined"
+```
+
+Two overrides exist for debugging; neither changes what the scanner checks,
+only where it fetches from.
+
 ## Commits
 
 Present tense, explain the why when it isn't obvious. Keep unrelated changes
