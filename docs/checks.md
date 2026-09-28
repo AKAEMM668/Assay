@@ -154,13 +154,15 @@ StellarExpert endpoints did not, and a scan during an outage claimed reputation
 had been read when it had not. Fixed, with the history in
 [the attestation run](attestation-run.md#finding-1).
 
-The same rule applies to negatives. SEP-0001 permits a currency entry whose only
-field is `toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the
-declaration to a separate file. Such an entry carries no code or issuer, so it
-can never match. Assay does not follow those links yet, so when a toml contains
-them it reports the asset as **unconfirmed** rather than claiming the domain
-failed to name it — overstating a negative is the same class of error as
-overstating a positive. Following those links is not implemented yet.
+The same rule applies to negatives. SEP-0001 permits a currency entry carrying
+`toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the declaration to
+a separate file; the link need not be the entry's only field, so one entry may
+carry both a link and a code. Assay does not follow those links yet, so every
+entry that carries one and does not already declare this asset inline makes the
+answer **unconfirmed** rather than a claim that the domain failed to name it —
+overstating a negative is the same class of error as overstating a positive.
+An entry that does match inline is the claim itself and is not an unresolved
+link. Following those links is not implemented yet.
 
 **Cannot conclude:** that a verified issuer is honest. It establishes that a
 named party has published a claim, nothing more. A scammer can register a domain

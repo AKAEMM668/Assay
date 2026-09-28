@@ -281,9 +281,9 @@ measurable.
   USDC is a 404, BERKSHIRE is a DNS failure.
 - **Linked currency files are not followed.** A `stellar.toml` may point to a
   per-currency file rather than inline the entry. Assay reports that as
-  unconfirmed rather than refuted — but the detection counts only entries with a
-  `toml` link and *no* code or issuer. An entry carrying both a link and a code
-  is missed, so the hedge is skipped in a case where it applies.
+  unconfirmed rather than refuted, counting every entry that carries a `toml`
+  link whether or not it also carries a code, and excluding only entries that
+  already declare the asset inline — a claim Assay did read needs no hedge.
 - **A verified domain is weak evidence.** It proves someone published a matching
   claim. Publishing a `stellar.toml` takes ten minutes.
 
