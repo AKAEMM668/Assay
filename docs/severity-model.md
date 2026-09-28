@@ -75,6 +75,28 @@ Every escalation is auditable: the report carries `base_severity` (capability
 alone) next to `severity` (after escalation) and a boolean `escalated`, so you
 can always see exactly what reputation contributed.
 
+### Escalation never sets a capability bit
+
+Stronger than the level rule, and the invariant the on-chain gate's correctness
+rests on: an escalation finding contributes **no capability bit** to the report
+bitset. Bits 0-2 (`auth_required`, `auth_revocable`, `auth_clawback_enabled`)
+are the ledger's own record of what the issuer can do, and `CapabilityMask`
+(names those three bits in `internal/mechanics/severity.go`) is how a consumer
+masks them out of the bitset to read that record. Reputation raising a level
+must never read as the ledger granting a power.
+
+Today reputation sets `blocklisted` (bit 5) on escalation — a non-capability
+bit, which is exactly the point: a CRITICAL asset with no auth flags must mask
+to an empty capability set, and it does.
+
+Nothing relies on convention here. `Engine.Run` rejects an escalation finding
+that carries any capability bit with an error rather than masking the bits and
+carrying on — silently dropping them would hide exactly the bug the guard
+exists to catch — and `TestEscalationNeverSetsCapabilityBits` asserts the
+invariant across every eval fixture and over hand-built escalated subjects,
+with a negative test proving the assertion fires on a deliberately bugged
+finding.
+
 ## Rule 3: accountability is reported, never discounted
 
 Reciprocal SEP-1 verification produces `verified`, `unverified`, or `unknown`.
@@ -125,6 +147,48 @@ self-documenting on-chain.
 | 3 | `high` | `auth_clawback_enabled` | Confiscate and burn a balance, without the holder's signature. |
 | 4 | `critical` | *(reputation)* | Reserved for escalation. Never produced by reading flags. |
 
+## What unevaluated means
+
+There is a fifth value on the Go side, `unevaluated`, and it is deliberately
+not a level.
+
+**`clear` means the issuer holds no powers — and that is a fact someone
+established by reading the flags.** The ledger was asked, the answer came back,
+and it said: no `auth_required`, no `auth_revocable`, no `auth_clawback_enabled`.
+
+**`unevaluated` means the flags were never read at all.** No question was
+asked, so no answer exists — including the answer "no powers". Collapsing the
+two would put the ABI's safest value on a subject nobody assessed, which is
+exactly the failure shape behind the bugs already found and fixed: a missing
+answer silently rendering as the most permissive one.
+
+In practice the live scanner cannot produce this state — it aborts the whole
+scan when Horizon cannot find the asset (`internal/scan/scan.go`), so a
+`Subject` with no flags on it only exists when one is built by hand. The value
+exists anyway, at the type level, so that nothing can accidentally attest an
+unread-flag report: such a finding carries `undetermined`, and
+`attest.FromReport` refuses it with `ErrUnevaluated`.
+
+`unevaluated` is not part of the on-chain ABI. It never serializes into an
+attestation (see [the contract interface](contract-interface.md)), and the
+contract's own range check would reject it as a second backstop. It also never
+appears in eval expectations: an eval subject always has flags to read.
+
+## What stale means
+
+A verdict has three potential lifecycle states: **valid**, **unknown**, and **stale**.
+
+- **`valid`** — A fresh, complete verdict. All required sources answered, flags were evaluated, and the observation is within the freshness policy window.
+- **`unknown`** — A check could not conclude. Either a required source was unreachable (`undetermined`) or flags were never read (`unevaluated`).
+- **`stale`** — The verdict was complete when made, but is now older than the policy window.
+
+Assay learned this distinction through three related failure modes:
+1. An unreachable source once rendered as a clean result (#23).
+2. Clear doubled as not-evaluated (#32).
+3. Stale was unrepresented off-chain, risking an expired verdict being consumed as currently safe (#57).
+
+On-chain, the Soroban example gate already distinguished staleness via `Error::AttestationStale` (`#2`). Off-chain, `Report` now represents `state` (`"valid"`, `"unknown"`, `"stale"`) and `stale` (`true`/`false`) distinctly in JSON. A program reading the report can never confuse an expired clean report with a fresh one. Furthermore, `attest.FromReport` refuses any stale report (`ErrStale`), guaranteeing that an expired verdict cannot be attested as fresh.
+
 `auth_immutable` is deliberately **not** a level. It is not a power over
 holders; it fixes whether the power set can change. Which direction that cuts
 depends entirely on what is already set:
@@ -133,8 +197,8 @@ depends entirely on what is already set:
   be added.
 - Locked with clawback — permanent. The power can never be given up.
 
-Assay states this in the reasoning rather than scoring it, because a single
-number cannot carry a conditional.
+Assay reports this as its own finding — [`mutability`](checks.md#mutability) —
+rather than scoring it, because a single number cannot carry a conditional.
 
 ## What severity does not tell you
 

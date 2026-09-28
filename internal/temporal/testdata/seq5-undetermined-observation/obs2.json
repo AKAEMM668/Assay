@@ -2,7 +2,7 @@
   "asset": {"code": "BERKSHIRE", "issuer": "GA22QHSHQEHDJS2ZOINSC77XPPQ24G5EFRJGVEIZLKC5FAW3PQ5XNSDQ"},
   "at": "2026-09-17T12:00:00Z",
   "mechanics": 38,
-  "base_severity": 3,
-  "severity": 4,
+  "base_severity": "high",
+  "severity": "critical",
   "undetermined": false
 }

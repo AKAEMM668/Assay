@@ -52,22 +52,39 @@ a caller over-reading the result.
 
 ```go
 type Subject struct {
-	Asset  Asset
-	Stat   *horizon.AssetStat   // asset record, incl. Flags
-	Issuer *horizon.Account     // issuer account, incl. Flags + HomeDomain
+	Asset           Asset
+	Stat            *horizon.AssetStat // asset record, incl. Flags
+	StatFetchedAt   time.Time          // when Horizon answered /assets
+	Issuer          *horizon.Account   // issuer account, incl. Flags + HomeDomain
+	IssuerFetchedAt time.Time          // when Horizon answered /accounts
 
-	Toml    *sep1.Doc           // nil if it did not resolve
-	TomlURL string
-	TomlErr string              // why it did not, verbatim
+	Toml            *sep1.Doc  // nil if it did not resolve; carries its own FetchedAt
+	TomlURL         string
+	TomlErr         string     // why it did not, verbatim
+	TomlAttemptedAt time.Time  // when the fetch was attempted
 
-	Directory    *stellarexpert.DirectoryEntry
-	DirectoryURL string
-	Blocked      *stellarexpert.BlockedDomain
-	BlockedURL   string
+	Directory            *stellarexpert.DirectoryEntry
+	DirectoryURL         string
+	DirectoryErr         string
+	DirectoryFetchedAt   time.Time // when the source answered
+	DirectoryAttemptedAt time.Time // when it was asked
+	Blocked              *stellarexpert.BlockedDomain
+	BlockedURL           string
+	BlockedErr           string
+	BlockedFetchedAt     time.Time
+	BlockedAttemptedAt   time.Time
 
-	FetchedAt time.Time
+	ScannedAt time.Time // when the scan started
 }
 ```
+
+Every fetch records **its own** completion time, and every failed fetch records
+its attempt time. Stamp evidence from the field matching the source the claim is
+attributed to — never from a shared scan-start timestamp: a StellarExpert answer
+that arrived twenty seconds after the Horizon one must not report Horizon's
+instant. Failure evidence (`"not retrievable: …"`) carries the attempt time and
+sets `Evidence.Attempted = true`, so a program can tell an attempt from an
+answer without parsing the claim.
 
 Any pointer field can be `nil`. Handle it explicitly — a missing source is not a
 clean result. **"We could not check" and "this is fine" must never render the

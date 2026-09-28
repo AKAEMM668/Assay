@@ -68,13 +68,13 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Source:      "horizon",
 			URL:         horizonAccountURL(s.Asset.Issuer),
 			Claim:       fmt.Sprintf("home_domain %q", domain),
-			RetrievedAt: s.FetchedAt,
+			RetrievedAt: s.IssuerFetchedAt,
 		})
 		f.Evidence = append(f.Evidence, Evidence{
 			Source:      "stellar.expert/directory",
 			URL:         s.DirectoryURL,
 			Claim:       fmt.Sprintf("listed under domain %q", s.Directory.Domain),
-			RetrievedAt: s.FetchedAt,
+			RetrievedAt: s.DirectoryFetchedAt,
 		})
 		return f, nil
 	}
@@ -88,10 +88,13 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				"to any value, so an unreachable toml proves nothing about who issued this.",
 			domain, s.TomlErr)
 		f.Evidence = append(f.Evidence, Evidence{
-			Source:      "stellar.toml",
-			URL:         s.TomlURL,
-			Claim:       "not retrievable: " + s.TomlErr,
-			RetrievedAt: s.FetchedAt,
+			Source: "stellar.toml",
+			URL:    s.TomlURL,
+			Claim:  "not retrievable: " + s.TomlErr,
+			// The toml never answered, so this carries the attempt time, not a
+			// retrieval time — and says so programmatically.
+			RetrievedAt: s.TomlAttemptedAt,
+			Attempted:   true,
 		})
 		return f, nil
 	}

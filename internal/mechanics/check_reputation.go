@@ -48,10 +48,13 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	if s.DirectoryErr != "" {
 		unreachable = append(unreachable, "the curated directory")
 		f.Evidence = append(f.Evidence, Evidence{
-			Source:      "stellar.expert/directory",
-			URL:         s.DirectoryURL,
-			Claim:       "not retrievable: " + s.DirectoryErr,
-			RetrievedAt: s.FetchedAt,
+			Source: "stellar.expert/directory",
+			URL:    s.DirectoryURL,
+			Claim:  "not retrievable: " + s.DirectoryErr,
+			// The source never answered, so this is the attempt time — marked
+			// as such, because an attempt is not an answer.
+			RetrievedAt: s.DirectoryAttemptedAt,
+			Attempted:   true,
 		})
 	}
 
@@ -61,7 +64,8 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Source:      "stellar.expert/blocked-domains",
 			URL:         s.BlockedURL,
 			Claim:       "not retrievable: " + s.BlockedErr,
-			RetrievedAt: s.FetchedAt,
+			RetrievedAt: s.BlockedAttemptedAt,
+			Attempted:   true,
 		})
 	}
 
@@ -72,7 +76,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			URL:    s.DirectoryURL,
 			Claim: fmt.Sprintf("listed as %q (domain %q, tags: %s)",
 				s.Directory.Name, s.Directory.Domain, tags),
-			RetrievedAt: s.FetchedAt,
+			RetrievedAt: s.DirectoryFetchedAt,
 		})
 		for _, tag := range []string{"malicious", "unsafe"} {
 			if s.Directory.HasTag(tag) {
@@ -87,7 +91,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Source:      "stellar.expert/blocked-domains",
 			URL:         s.BlockedURL,
 			Claim:       fmt.Sprintf("domain %q blocked=%t", s.Blocked.Domain, s.Blocked.Blocked),
-			RetrievedAt: s.FetchedAt,
+			RetrievedAt: s.BlockedFetchedAt,
 		})
 		if s.Blocked.Blocked {
 			flagged = append(flagged, fmt.Sprintf(
