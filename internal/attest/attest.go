@@ -78,9 +78,9 @@ var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so
 type ProvenanceStatus string
 
 const (
-	ProvenanceValid		ProvenanceStatus = "valid"		// ProvenanceValid means the scanner version meets the caller's minimum.
-	ProvenanceInvalid	ProvenanceStatus = "invalid"	// Version below caller's minimum
-	ProvenanceUnknown	ProvenanceStatus = "unknown"	// No version recorded (pre-v2 attestation)
+	ProvenanceValid   ProvenanceStatus = "valid"   // ProvenanceValid means the scanner version meets the caller's minimum.
+	ProvenanceInvalid ProvenanceStatus = "invalid" // Version below caller's minimum
+	ProvenanceUnknown ProvenanceStatus = "unknown" // No version recorded (pre-v2 attestation)
 )
 
 // ErrUnknownProvenance reports an attestation produced without version binding (pre-v2).
@@ -137,6 +137,7 @@ func CompareVersions(v1, v2 string) int {
 	}
 	return 0
 }
+
 // ErrStale reports that the report is stale and cannot be attested as fresh.
 // Contract precedent: AttestationStale is error #2 in the example gate.
 var ErrStale = errors.New("attest: report is stale, so it cannot be attested as fresh")
