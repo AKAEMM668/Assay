@@ -27,7 +27,11 @@ type Server struct {
 	// caller can replace the default in-memory store with a file-backed one
 	// (history.Open) or with a pre-seeded store in a test.
 	History *history.Store
-	Log     *slog.Logger
+	// Health reports per-upstream reachability for GET /readyz. It is a
+	// pointer so a test can wire the prober to a stub upstream; when nil,
+	// handleReadyz builds one from the server's own clients.
+	Health *HealthProber
+	Log    *slog.Logger
 }
 
 // NewServer returns a Server backed by the production scanner and an in-memory
@@ -41,10 +45,15 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/scan", s.handleScan)
 	mux.HandleFunc("GET /api/v1/history", s.handleHistory)
+	// Liveness and readiness are separate endpoints on purpose: /healthz says
+	// the process is up and checks nothing, /readyz asks the upstreams. A
+	// failing probe must never report healthy; a dying process must still be
+	// able to answer /healthz.
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 	mux.HandleFunc("GET /", s.handleUI)
 	return mux
 }
