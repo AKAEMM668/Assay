@@ -1,6 +1,9 @@
 # Fixture provenance
 
-Captured 2026-08-10 from live public sources.
+Captured 2026-08-10 from live public sources, except `velo-no-home-domain`
+which was captured 2026-09-28 (that directory's `captured.date` records the
+date, and `loadSubject` reads it so evidence retrieval times agree with this
+file).
 Each directory is one labelled subject for the eval in docs/eval.md.
 
 | file | source URL |
@@ -30,3 +33,14 @@ Each directory is one labelled subject for the eval in docs/eval.md.
 | `doge-noflags-scam/stellar.toml.status` | https://darkpool.digital/.well-known/stellar.toml (HTTP 000) |
 | `doge-noflags-scam/blocked.json` | https://api.stellar.expert/explorer/directory/blocked-domains/darkpool.digital |
 | `doge-noflags-scam/directory.json` | https://api.stellar.expert/explorer/directory/GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P |
+| `velo-no-home-domain/asset.json` | https://horizon.stellar.org/assets?asset_code=VELO&asset_issuer=GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M |
+| `velo-no-home-domain/account.json` | https://horizon.stellar.org/accounts/GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M |
+| `velo-no-home-domain/directory.json` | https://api.stellar.expert/explorer/directory/GDM4RQUQQUVSKQA7S6EM7XBZP3FCGH4Q7CL6TABQ7B2BEJ5ERARM2M5M |
+
+`velo-no-home-domain` is the subject issue #3 asks for: an issuer whose account
+carries no `home_domain` at all. Verified live on 2026-09-28 that Horizon
+**omits the field entirely** for this account rather than returning `""`, so
+`account.json` deliberately has no `home_domain` key. The account has no
+home domain, so no `stellar.toml` or `blocked.json` exists for it — the scan
+does not fetch either for an account that advertised nothing
+(`internal/scan/scan.go`).

@@ -30,7 +30,7 @@ func loadSubject(t *testing.T, dir string) *mechanics.Subject {
 		Asset:     mechanics.Asset{Code: stat.AssetCode, Issuer: stat.AssetIssuer},
 		Stat:      &stat,
 		Issuer:    &acct,
-		FetchedAt: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC),
+		FetchedAt: capturedAt(t, base),
 	}
 
 	if acct.HomeDomain != "" {
@@ -59,6 +59,24 @@ func loadSubject(t *testing.T, dir string) *mechanics.Subject {
 		s.Blocked = &b
 	}
 	return s
+}
+
+// capturedAt returns the capture date recorded for a fixture directory. The
+// original sweep recorded no per-directory date, so those directories keep the
+// 2026-08-10 date stated in testdata/PROVENANCE.md; a later capture writes
+// `captured.date` so evidence retrieval times in a report agree with the
+// provenance instead of inheriting the date of the first sweep.
+func capturedAt(t *testing.T, base string) time.Time {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(base, "captured.date"))
+	if err != nil {
+		return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC)
+	}
+	d, err := time.Parse("2006-01-02", strings.TrimSpace(string(b)))
+	if err != nil {
+		t.Fatalf("parse %s/captured.date: %v", base, err)
+	}
+	return d
 }
 
 func readJSON(t *testing.T, path string, out any) {
@@ -133,6 +151,15 @@ func TestEval(t *testing.T) {
 			wantEscalated: true,
 			wantAccount:   mechanics.AccountabilityUnverified,
 		},
+		{
+			dir: "velo-no-home-domain",
+			why: "no home_domain at all: nobody has claimed the asset, so accountability is " +
+				"unknown rather than unverified. Its flags are identical to aqua-clear-verified, " +
+				"so its severity must be identical too — absence of a claim is not a failed one.",
+			wantBase:     mechanics.Clear,
+			wantSeverity: mechanics.Clear,
+			wantAccount:  mechanics.AccountabilityUnknown,
+		},
 	}
 
 	eng := mechanics.NewEngine()
@@ -192,6 +219,53 @@ func TestAccountabilityNeverChangesSeverity(t *testing.T) {
 	if repV.Accountability == repA.Accountability {
 		t.Errorf("accountability should differ between the two subjects, both = %v",
 			repV.Accountability)
+	}
+}
+
+// TestNoHomeDomainIsUnknownNotUnverified is the distinction issue #3 asks for,
+// asserted against a real capture rather than a stripped copy: VELO's issuer
+// account carries no home_domain at all (Horizon omits the field entirely), so
+// nobody has claimed the asset. That is a different state from a domain that
+// was advertised and failed verification, and it must not move severity either
+// — aqua-clear-verified is the same flags with a claim on top.
+func TestNoHomeDomainIsUnknownNotUnverified(t *testing.T) {
+	eng := mechanics.NewEngine()
+
+	unclaimed, err := eng.Run(context.Background(), loadSubject(t, "velo-no-home-domain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := eng.Run(context.Background(), loadSubject(t, "aqua-clear-verified"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if unclaimed.Accountability != mechanics.AccountabilityUnknown {
+		t.Errorf("accountability = %q, want %q: an issuer with no home_domain has made no "+
+			"claim, it has not failed one", unclaimed.Accountability, mechanics.AccountabilityUnknown)
+	}
+	if claimed.Accountability != mechanics.AccountabilityVerified {
+		t.Errorf("control subject accountability = %q, want %q",
+			claimed.Accountability, mechanics.AccountabilityVerified)
+	}
+	if unclaimed.Base != claimed.Base || unclaimed.Severity != claimed.Severity {
+		t.Errorf("identical flags classified differently: no home_domain = %v/%v, verified domain = %v/%v",
+			unclaimed.Base, unclaimed.Severity, claimed.Base, claimed.Severity)
+	}
+
+	var domain *mechanics.Finding
+	for i := range unclaimed.Findings {
+		if unclaimed.Findings[i].Check == "sep1-domain" {
+			domain = &unclaimed.Findings[i]
+		}
+	}
+	if domain == nil {
+		t.Fatal("report carries no sep1-domain finding")
+	}
+	for _, want := range []string{"Nobody has publicly claimed", "not a failed verification"} {
+		if !strings.Contains(domain.Reasoning, want) {
+			t.Errorf("reasoning must say %q: %s", want, domain.Reasoning)
+		}
 	}
 }
 

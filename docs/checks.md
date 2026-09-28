@@ -57,6 +57,14 @@ to any string; a stellar.toml can list any code it likes. Matching on code alone
 would let any domain claim any asset — the exact impersonation this check
 exists to catch — so both must match.
 
+Two states are decided before any toml is fetched. **No `home_domain` at all**
+means nobody has claimed the asset: accountability is `unknown`, and the
+reasoning says so plainly — an absent claim is not a failed one. **A
+`home_domain` that disagrees with the curated directory's `domain`** is
+reported as `unverified` with both claims attributed to their source and URL,
+because a holder cannot tell a benign brand migration from an impersonation
+setup while the two sources simply contradict each other.
+
 Verification failures are reported verbatim, including the HTTP status. "We
 could not check" and "this is fine" are different answers and must never render
 the same.

@@ -25,11 +25,13 @@ with provenance recorded in
 | `USDC` (Circle) | **legitimate, uses the flags** | The critical case. A real regulated stablecoin that legitimately uses `auth_revocable`. |
 | `BERKSHIRE` (nasdaq.finance) | trap | Impersonation asset with clawback. Confiscation capability *and* confirmed-bad reputation. |
 | `DOGE` (darkpool.digital) | trap | Known scam carrying **no auth flags**. The case that justifies the second axis. |
+| `VELO` | legitimate, **unattributed** | No `home_domain` at all: nobody has claimed it. Tests that an absent claim reads `unknown` — not `unverified` — and moves no severity. |
 
 ## Results
 
-Measured output from fixtures captured on 2026-08-10. `TestEval` asserts every
-row on each test run, so the table cannot drift from the code without a red test:
+Measured output from fixtures captured on 2026-08-10 (VELO, 2026-09-28).
+`TestEval` asserts every row on each test run, so the table cannot drift from
+the code without a red test:
 
 | Subject | Asset | Base | Final | Escalated | Accountability | Mechanics |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -38,6 +40,7 @@ row on each test run, so the table cannot drift from the code without a red test
 | usdc-revocable-regulated | `USDC` | medium | **medium** | false | unverified | `auth_revocable`, `domain_unverified` |
 | berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
 | doge-noflags-scam | `DOGE` | clear | **critical** | true | unverified | `domain_unverified`, `blocklisted` |
+| velo-no-home-domain | `VELO` | clear | **clear** | false | unknown | `domain_unverified` |
 
 ## What each result proves
 
@@ -101,12 +104,27 @@ never does. SHX additionally carries `auth_immutable`, and the reasoning
 correctly frames that as a safety property: the issuer can never add clawback
 later.
 
+### VELO — no claim is not a failed claim
+
+`clear`, accountability `unknown`.
+
+The first subject in the set with **no `home_domain` at all**: Horizon omits
+the field entirely for this account rather than returning `""` (verified live,
+2026-09-28), so there is no claim to verify. Accountability is therefore
+`unknown`, a different answer from `unverified` — `unverified` means somebody
+advertised a domain and the claim did not hold up; `unknown` means nobody has
+claimed the asset in the first place.
+
+Its flags are identical to AQUA's and so is its severity: `base: clear`,
+`final: clear`. Absence of a claim is not evidence against the asset and not
+evidence for it — it only means there is nobody to name.
+
 ## Coverage gaps
 
 Stated plainly, because an eval that hides its gaps is marketing.
 
-- **Five subjects.** Enough to pin the judgment boundaries, not enough for a
-  statistical claim. No precision/recall numbers are quoted, because five
+- **Six subjects.** Enough to pin the judgment boundaries, not enough for a
+  statistical claim. No precision/recall numbers are quoted, because six
   subjects cannot support them.
 - **No legitimately-clawback-enabled asset.** The set has no confirmed-good
   regulated issuer that actually uses clawback. Sampling 2,400 live assets

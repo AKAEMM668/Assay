@@ -16,6 +16,13 @@ func horizonAssetURL(a Asset) string {
 	return horizon.DefaultURL + "/assets?" + q.Encode()
 }
 
+// horizonAccountURL returns the public Horizon URL of an issuer account, so a
+// claim read from the account record — home_domain is one — can be re-fetched
+// exactly where Assay read it.
+func horizonAccountURL(issuer string) string {
+	return horizon.DefaultURL + "/accounts/" + issuer
+}
+
 // flagSummary renders the issuer flag set in Horizon's own vocabulary.
 func flagSummary(f horizon.Flags) string {
 	return fmt.Sprintf(
