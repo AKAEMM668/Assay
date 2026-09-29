@@ -94,6 +94,31 @@ func Corpus() []Label {
 			},
 		},
 		{
+			Dir: "usdz-clawback-regulated",
+			Why: "the confirmed-legitimate clawback control asset (docs/eval.md " +
+				"coverage-gaps). USDZ (Zeam Money, zeam.money) carries both " +
+				"auth_revocable and auth_clawback_enabled, so capability alone " +
+				"puts it at high — and it must NOT be escalated: the domain " +
+				"publishes a reciprocal stellar.toml that names the exact issuer, " +
+				"the directory tag is 'issuer' (not 'malicious'), and no " +
+				"blocklist entry exists. The severity model's central claim is " +
+				"that it treats legitimate clawback fairly; this subject is the " +
+				"only one in the set that measures that claim.",
+			Base:           mechanics.High,
+			Severity:       mechanics.High,
+			Escalated:      false,
+			Accountability: mechanics.AccountabilityVerified,
+			Checks: map[string]CheckLabel{
+				"capability": {
+					Severity:  mechanics.High,
+					Mechanics: mechanics.MechAuthRevocable | mechanics.MechClawbackEnabled,
+				},
+				"mutability":  {Severity: mechanics.Clear},
+				"sep1-domain": {Severity: mechanics.Clear},
+				"reputation":  {Severity: mechanics.Clear, Escalation: true},
+			},
+		},
+		{
 			Dir: "usdc-revocable-regulated",
 			Why: "a real regulated stablecoin that legitimately uses auth_revocable. It " +
 				"must report freeze-capable (medium) on the strength of the flag alone.",
