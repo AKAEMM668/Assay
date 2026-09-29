@@ -14,6 +14,10 @@ import (
 
 	"github.com/use-assay/assay/internal/api"
 	"github.com/use-assay/assay/internal/attest"
+	// Aliased because this file already has a local history() for the CLI's
+	// evidence view; this package is the persisted observation store behind the
+	// HTTP endpoint, a different thing.
+	historystore "github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 )
@@ -31,7 +35,8 @@ func usage() {
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
-  assay serve [-addr]             serve the HTTP API and UI
+  assay serve [-addr] [-history PATH]
+                                  serve the HTTP API and UI
 `)
 }
 
@@ -243,15 +248,26 @@ type historyEntry struct {
 func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	addr := fs.String("addr", ":8080", "listen address")
+	historyPath := fs.String("history", "",
+		"path to the observation history log (JSON Lines); empty keeps history in memory only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
-	srv := &http.Server{
+	srv := api.NewServer(log)
+	if *historyPath != "" {
+		store, err := historystore.Open(*historyPath)
+		if err != nil {
+			return err
+		}
+		srv.History = store
+	}
+
+	httpSrv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(log).Handler(),
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Info("assay listening", "addr", *addr)
-	return srv.ListenAndServe()
+	log.Info("assay listening", "addr", *addr, "history", *historyPath)
+	return httpSrv.ListenAndServe()
 }
