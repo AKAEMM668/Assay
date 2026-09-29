@@ -401,7 +401,10 @@ hand-written severity reach the contract.
 - **Not mainnet, and not a candidate for it.** The list below is why.
 - **One key can write anything.** The admin is a single ed25519 account whose
   seed lives on one machine. Anyone holding it can attest any severity for any
-  asset. A real deployment wants a threshold of independent attesters;
+  asset. Custody, backup, loss and compromise response, and why rotation
+  currently means redeploy are documented in
+  [attester-key.md](attester-key.md). A real deployment wants a threshold of
+  independent attesters;
   [multi-attestor.md](multi-attestor.md) compares the options.
 - **10 attested assets.** Everything else on the network reads as `None`. That is the
   correct answer — unknown, not safe — but it means the registry is not useful
