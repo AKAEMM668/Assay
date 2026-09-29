@@ -83,6 +83,25 @@
       ]
     },
     {
+      "fixture": "usdz-clawback-regulated",
+      "asset": "USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+      "label": "legitimate",
+      "base_severity": "high",
+      "severity": "high",
+      "escalated": false,
+      "accountability": "verified",
+      "mechanics": ["auth_revocable", "auth_clawback_enabled"],
+      "capture_date": "2026-09-27",
+      "notes": "Confirmed-legitimate clawback control asset. Issuer verified independently via the zeam.money stellar.toml, which lists USDZ under [[CURRENCIES]] with matching issuer, and via the [DOCUMENTATION] block naming ZEAM LIMITED with FSCA (South Africa) licensing.",
+      "source_urls": [
+        "https://horizon.stellar.org/assets?asset_code=USDZ&asset_issuer=GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+        "https://horizon.stellar.org/accounts/GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+        "https://zeam.money/.well-known/stellar.toml",
+        "https://api.stellar.expert/explorer/directory/blocked-domains/zeam.money",
+        "https://api.stellar.expert/explorer/directory/GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR"
+      ]
+    },
+    {
       "fixture": "usdc-revocable-regulated",
       "asset": "USDC-GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
       "label": "legitimate",

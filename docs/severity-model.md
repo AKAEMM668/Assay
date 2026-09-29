@@ -174,6 +174,21 @@ attestation (see [the contract interface](contract-interface.md)), and the
 contract's own range check would reject it as a second backstop. It also never
 appears in eval expectations: an eval subject always has flags to read.
 
+## What stale means
+
+A verdict has three potential lifecycle states: **valid**, **unknown**, and **stale**.
+
+- **`valid`** — A fresh, complete verdict. All required sources answered, flags were evaluated, and the observation is within the freshness policy window.
+- **`unknown`** — A check could not conclude. Either a required source was unreachable (`undetermined`) or flags were never read (`unevaluated`).
+- **`stale`** — The verdict was complete when made, but is now older than the policy window.
+
+Assay learned this distinction through three related failure modes:
+1. An unreachable source once rendered as a clean result (#23).
+2. Clear doubled as not-evaluated (#32).
+3. Stale was unrepresented off-chain, risking an expired verdict being consumed as currently safe (#57).
+
+On-chain, the Soroban example gate already distinguished staleness via `Error::AttestationStale` (`#2`). Off-chain, `Report` now represents `state` (`"valid"`, `"unknown"`, `"stale"`) and `stale` (`true`/`false`) distinctly in JSON. A program reading the report can never confuse an expired clean report with a fresh one. Furthermore, `attest.FromReport` refuses any stale report (`ErrStale`), guaranteeing that an expired verdict cannot be attested as fresh.
+
 `auth_immutable` is deliberately **not** a level. It is not a power over
 holders; it fixes whether the power set can change. Which direction that cuts
 depends entirely on what is already set:
