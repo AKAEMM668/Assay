@@ -130,6 +130,37 @@ pub struct Safety {
     pub attested_at: u64,
 }
 
+/// Event emitted when an attestation is written or overwritten.
+///
+/// This event provides an on-chain audit trail so that any overwrite of an
+/// attestation can be detected and the previous value reconstructed from
+/// chain history.
+///
+/// Topics:
+/// - `"attest"`: static topic identifying the event type
+/// - `asset`: the Stellar Asset Contract address (as Address)
+///
+/// Data:
+/// - `previous`: the previous attestation, or `None` if this is the first
+///   attestation for this asset
+/// - `current`: the new attestation that was written
+///
+/// Retention: Soroban contract events are retained in ledger history for
+/// approximately 1 year (the same retention as ledger entries). Beyond that
+/// window, history is not reconstructible from chain alone; an off-chain
+/// indexer or archive is required for longer audit trails.
+#[contractevent(topics = ["attest"], data_format = "map")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationEvent {
+    /// The asset this attestation is for.
+    pub asset: Address,
+    /// The previous attestation, if any. `None` means this is the first
+    /// attestation for this asset.
+    pub previous: Option<Safety>,
+    /// The new attestation that was written.
+    pub current: Safety,
+}
+
 #[contracttype]
 enum DataKey {
     /// Contract admin, the only address permitted to attest.
@@ -202,6 +233,10 @@ impl SafetyRegistry {
     /// scan, and `make attest` submits them. Validation here is not a
     /// formality: it enforces at write time the invariants that
     /// [`Self::is_safe`] relies on at read time.
+    ///
+    /// Emits an [`AttestationEvent`] with the previous value (if any) and the
+    /// new value, providing an on-chain audit trail. See the event
+    /// documentation for retention semantics.
     pub fn attest(
         env: Env,
         asset: Address,
@@ -230,6 +265,14 @@ impl SafetyRegistry {
             evidence_hash,
             attested_at,
         };
+
+        // Read the previous value before overwriting
+        let previous = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Safety>(&DataKey::Safety(asset.clone()));
+
+        // Write the new attestation
         env.storage()
             .persistent()
             .set(&DataKey::Safety(asset.clone()), &safety);

@@ -327,7 +327,7 @@ under a changed v1 format would break every existing attestation.
   options are compared, with a recommendation, in
   [multi-attestor.md](multi-attestor.md).
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
-  issuer's flags change. Freshness is entirely the caller's problem, via
+  issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
 - **TTL is extended on write only.** `init`, `attest` and `revoke` extend the
   contract instance and code to the network maximum, and `attest` extends the
