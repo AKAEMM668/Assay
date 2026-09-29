@@ -20,6 +20,10 @@ them through. If you find yourself writing a scam heuristic over domain
 names, stop — that layer already exists and is better maintained than
 anything we would write.
 
+## Debugging a verdict
+
+If Assay reports something unexpected for an asset, see [docs/debugging-a-verdict.md](docs/debugging-a-verdict.md) for a step-by-step workflow to trace the verdict to its cause and determine whether the discrepancy is in the live source ("the source says so") or in Assay's code.
+
 ## Adding a check
 
 Full guide: [docs/adding-a-check.md](docs/adding-a-check.md).
@@ -59,6 +63,37 @@ make deploy-testnet   # upload + deploy, prints the new contract ID
 make attest ASSET=CODE-ISSUER   # scan live and write the result on-chain
 make read   ASSET=CODE-ISSUER   # read it back with get_safety
 ```
+
+### Contract toolchain
+
+Reproducing a wasm hash recorded in [docs/deployment.md](docs/deployment.md)
+takes the same toolchain the deployment was built with, not just the same
+source. Three versions decide the optimized bytes:
+
+| Component | Recorded build |
+| --- | --- |
+| `stellar` CLI | 27.1.0 |
+| Rust target | `wasm32v1-none` |
+| `soroban-sdk` | 27.0.5 |
+
+The Rust compiler channel is pinned in `assay-contracts/rust-toolchain.toml`
+([#127](https://github.com/use-assay/Assay/issues/127)), so `rustup` reads it
+automatically for anything under `assay-contracts/` and you do not choose a
+toolchain by hand. Verify the environment before any contract work:
+
+```sh
+stellar --version && rustup target list --installed && make build-contract
+```
+
+`stellar --version` must print 27.1.0 and the target list must contain
+`wasm32v1-none`; `make build-contract` then writes the optimized wasm to
+`assay-contracts/out/`. A mismatch on any of the three changes the optimized
+bytes, and therefore the hash, even when the contract source is byte for byte
+identical — the CLI also runs the wasm optimizer and checks the exported
+interface, so it is not a pass-through to `cargo build`. If
+`sha256sum assay-contracts/out/assay_safety_registry.wasm` does not match the
+[recorded wasm hash](docs/deployment.md#live-addresses), check these versions
+before suspecting a source change.
 
 `make attest` derives every value from a live scan via `assay attestation`.
 Never hand-write a severity, a bitset, or an evidence hash into a transaction —
@@ -127,6 +162,65 @@ not support.
 Tests must not require network access. Fetchers are interfaces; tests use
 fixtures captured from real responses under `internal/*/testdata/`. When you
 capture a new fixture, note the date and the URL it came from.
+
+### The reproducibility job
+
+`.github/workflows/reproducibility.yml` recomputes the `evidence_hash` for
+the ten attested assets by scanning them live and diffs each fresh hash
+against the table in `docs/deployment.md`. The logic lives in
+`scripts/reproducibility.sh` so it can be run locally exactly as CI runs it.
+It is the regression test for [#24](https://github.com/use-assay/Assay/issues/24):
+three of the ten on-chain hashes embed host-specific transport error text,
+so until #24 is fixed the job is expected to report mismatches from any
+machine whose DNS resolver differs from the attester's.
+
+It runs weekly (`cron: 0 6 * * 1`) and on demand (`workflow_dispatch`):
+
+```sh
+gh workflow run reproducibility.yml && gh run watch
+```
+
+It is deliberately **not on the PR path and never gates merges**. It depends
+on live third-party sources — Horizon, StellarExpert, issuer `stellar.toml`
+hosts — so running it per-PR would make CI flaky for reasons unrelated to
+the change under review. An upstream outage must not turn a contributor's
+green PR red, and a scanner change must not be judged by what the live
+network happened to answer that hour. The merge gate above is the per-PR
+check; this job is the scheduled detector.
+
+Semantics, matching the script's exit codes:
+
+- **valid (exit 0)** — every fresh hash matches: pass.
+- **invalid (exit 1)** — a genuine mismatch fails and names the asset with
+  both hashes (`MISMATCH ASSET expected … actual …`).
+- **unknown (exit 2)** — a scan that returns undetermined, or any scan error
+  such as an unreachable source, is reported as **inconclusive**, never as a
+  pass and never as a hard failure. An upstream outage is not a
+  reproducibility bug. GitHub has no neutral job conclusion, so the workflow
+  records inconclusive as a warning with a green check; the step summary
+  says `INCONCLUSIVE`, not `PASS`.
+- **stale — n/a.** The hash commits to what the sources claimed, not to when
+  they were asked, so attestation age is irrelevant to this comparison.
+  Freshness policy lives in [docs/freshness.md](docs/freshness.md).
+
+Run it locally before relying on a scheduled result:
+
+```sh
+go build -o assay ./cmd/assay
+./scripts/reproducibility.sh
+```
+
+Exercise the inconclusive path by pointing a source at an unreachable
+address (supported via `ASSAY_HORIZON_URL` / `ASSAY_STELLAREXPERT_URL`, which
+`internal/scan` reads; empty means the public default):
+
+```sh
+ASSAY_STELLAREXPERT_URL=http://127.0.0.1:1 ./scripts/reproducibility.sh --attempts 1 --delay 0
+# expect: exit 2, every asset INCONCLUSIVE with "scan is undetermined"
+```
+
+Two overrides exist for debugging; neither changes what the scanner checks,
+only where it fetches from.
 
 ## Commits
 

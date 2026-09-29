@@ -348,6 +348,11 @@ stellar contract extend --id <CONTRACT_ID> --key-xdr "$KEY" --durability persist
 
 ## Redeploying
 
+A rebuilt wasm only reproduces the recorded hashes if it comes from the same
+toolchain. [CONTRIBUTING.md](../CONTRIBUTING.md#contract-toolchain) names the
+`stellar` CLI version, the Rust target and the `soroban-sdk` version, and gives
+the command that verifies them before you build.
+
 ```sh
 make build-contract          # stellar contract build -> assay-contracts/out/
 make deploy-testnet          # upload + deploy, prints the new contract ID

@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -70,39 +71,19 @@ type Scanner struct {
 	Engine  *mechanics.Engine
 }
 
-// Options configures a Scanner.
+// New returns a Scanner wired to the public production sources.
 //
-// The cache options exist because every scan consumes a free, third-party
-// service, and the cost of not re-reading it is staleness. Which way to trade
-// is a deployment's to make, not a constant's: a one-shot CLI scan can afford
-// to re-fetch everything, while a long-lived server answering repeated scans of
-// the same issuer should not rebuild them from scratch each time. The default
-// is the conservative one documented in docs/caching.md.
+// Two environment variables override the upstream endpoints, to let the
+// reproducibility job (and anyone debugging it) point a source at an
+// unreachable address and exercise the undetermined path without editing
+// code:
 //
-// Ledger lookups are deliberately NOT covered here. See NewWithOptions.
-type Options struct {
-	// ReputationDirectoryTTL and ReputationBlocklistTTL bound how long a
-	// curated StellarExpert answer may be reused, measured from the fetch that
-	// produced it. A zero TTL disables caching of that source.
-	ReputationDirectoryTTL time.Duration
-	ReputationBlocklistTTL time.Duration
-
-	// NoReputationCache disables the reputation cache outright: every scan
-	// re-fetches both curated sources. Use it when a stale answer would be
-	// unacceptable and the extra requests are affordable.
-	NoReputationCache bool
-}
-
-// DefaultOptions returns the production cache policy.
-func DefaultOptions() Options {
-	return Options{
-		ReputationDirectoryTTL: stellarexpert.DefaultDirectoryTTL,
-		ReputationBlocklistTTL: stellarexpert.DefaultBlocklistTTL,
-	}
-}
-
-// New returns a Scanner wired to the public production sources with the
-// default cache policy.
+//	ASSAY_HORIZON_URL        overrides Horizon's base URL
+//	ASSAY_STELLAREXPERT_URL  overrides StellarExpert's API root
+//
+// Empty means the public default. Anything else is used verbatim, so
+// pointing one at http://127.0.0.1:1 makes that source fail and the scan
+// report undetermined (or fail, for Horizon) rather than succeed.
 func New() *Scanner {
 	return NewWithOptions(DefaultOptions())
 }
@@ -119,9 +100,9 @@ func New() *Scanner {
 // docs/caching.md.
 func NewWithOptions(opts Options) *Scanner {
 	return &Scanner{
-		Horizon: horizon.New(""),
+		Horizon: horizon.New(os.Getenv("ASSAY_HORIZON_URL")),
 		Toml:    sep1.NewFetcher(),
-		Expert:  stellarexpert.NewWithOptions("", expertOptions(opts)),
+		Expert:  stellarexpert.New(os.Getenv("ASSAY_STELLAREXPERT_URL")),
 		Engine:  mechanics.NewEngine(),
 	}
 }
