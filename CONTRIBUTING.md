@@ -76,10 +76,16 @@ source. Three versions decide the optimized bytes:
 | Rust target | `wasm32v1-none` |
 | `soroban-sdk` | 27.0.5 |
 
-The Rust compiler channel is pinned in `assay-contracts/rust-toolchain.toml`
-([#127](https://github.com/use-assay/Assay/issues/127)), so `rustup` reads it
-automatically for anything under `assay-contracts/` and you do not choose a
-toolchain by hand. Verify the environment before any contract work:
+**The Rust compiler channel is not pinned.** There is no
+`assay-contracts/rust-toolchain.toml` yet ([#127](https://github.com/use-assay/Assay/issues/127)),
+so `rustup` selects whichever channel happens to be installed, and the
+compiler version changes the optimized bytes: the same source under the same
+`stellar` CLI hashes differently on rustc 1.95.0 and rustc 1.98.1. Until that
+pin exists, a build here cannot be expected to reproduce a hash recorded in
+[docs/deployment.md](docs/deployment.md), and `make verify-wasm` reports
+`unpinned` and exits 2 rather than guessing — see
+[docs/deployment.md](docs/deployment.md#does-the-source-still-build-what-is-deployed).
+Check the environment before any contract work:
 
 ```sh
 stellar --version && rustup target list --installed && make build-contract
@@ -93,7 +99,9 @@ identical — the CLI also runs the wasm optimizer and checks the exported
 interface, so it is not a pass-through to `cargo build`. If
 `sha256sum assay-contracts/out/assay_safety_registry.wasm` does not match the
 [recorded wasm hash](docs/deployment.md#live-addresses), check these versions
-before suspecting a source change.
+before suspecting a source change — and note that a mismatch is only evidence
+once the compiler is pinned, since an unpinned one changes the hash on its
+own.
 
 `make attest` derives every value from a live scan via `assay attestation`.
 Never hand-write a severity, a bitset, or an evidence hash into a transaction —
