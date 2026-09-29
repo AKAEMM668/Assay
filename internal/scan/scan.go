@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -71,11 +72,23 @@ type Scanner struct {
 }
 
 // New returns a Scanner wired to the public production sources.
+//
+// Two environment variables override the upstream endpoints, to let the
+// reproducibility job (and anyone debugging it) point a source at an
+// unreachable address and exercise the undetermined path without editing
+// code:
+//
+//	ASSAY_HORIZON_URL        overrides Horizon's base URL
+//	ASSAY_STELLAREXPERT_URL  overrides StellarExpert's API root
+//
+// Empty means the public default. Anything else is used verbatim, so
+// pointing one at http://127.0.0.1:1 makes that source fail and the scan
+// report undetermined (or fail, for Horizon) rather than succeed.
 func New() *Scanner {
 	return &Scanner{
-		Horizon: horizon.New(""),
+		Horizon: horizon.New(os.Getenv("ASSAY_HORIZON_URL")),
 		Toml:    sep1.NewFetcher(),
-		Expert:  stellarexpert.New(""),
+		Expert:  stellarexpert.New(os.Getenv("ASSAY_STELLAREXPERT_URL")),
 		Engine:  mechanics.NewEngine(),
 	}
 }
