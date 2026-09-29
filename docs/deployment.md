@@ -346,6 +346,62 @@ stellar contract extend --id <CONTRACT_ID> --key-xdr "$KEY" --durability persist
   --ledgers-to-extend 3110399 --source-account assay-attester --network testnet
 ```
 
+## Checking for drift
+
+The tables in this file are the record of what is deployed, and they have
+drifted before: the docs named a superseded gate after the redeploy, and an
+unexplained duplicate instance existed before anything recorded it. Drift is
+silent, because a stale table reads exactly like a correct one.
+
+`scripts/check-deployment.sh` reads these tables and the network, and reports
+the difference:
+
+```sh
+scripts/check-deployment.sh                          # public testnet endpoint
+scripts/check-deployment.sh --rpc https://… --timeout 30
+ASSAY_RPC_URL=https://… ASSAY_RPC_TIMEOUT=30 scripts/check-deployment.sh
+scripts/check-deployment.sh --deployment /tmp/copy.md   # a copy, not this file
+```
+
+It checks the registry and gate addresses, the wasm hash of the registry and of
+all three gate instances, the registry each gate was constructed with, and the
+severity, flags and evidence hash of all ten attestations — 21 checks. Chain
+state is read with one `getLedgerEntries` call, as in
+[Entry lifetime](#entry-lifetime) above, so it needs no `stellar` CLI and no
+transaction: restoring an archived entry is what a transaction would do, and
+reading what is documented does not require it.
+
+Every check gets one of four outcomes, and only the first is a pass:
+
+| Outcome | Meaning |
+| --- | --- |
+| `valid` | The documented value matches chain state. |
+| `invalid` | A mismatch, reported with **both** values. For an address, "no contract at this address" is the on-chain value. |
+| `absent` | A documented attestation with no entry on chain — the expected outcome for an archived or withdrawn attestation. Distinct from a mismatch, and never a match. |
+| `unknown` | The RPC was unreachable, timed out, or answered with an error. Inconclusive by definition: neither a match nor a mismatch, and never a pass. |
+
+Exit codes follow `scripts/reproducibility.sh`: **0** if every check is valid,
+**1** if any is `invalid` or `absent` (drift, named, with both values), and
+**2** if no drift was found but at least one check is `unknown`, or the tables
+could not be parsed. Exit 2 never means "no drift" — it means the run could not
+answer the question, so a run with any `unknown` never exits 0. When drift and
+an `unknown` occur together the run exits 1 and reports the unknowns too: the
+finding is the more important information.
+
+The script only reads. It never edits this file and never submits a
+transaction; fixing drift is a decision for whoever owns the deployment.
+
+[`.github/workflows/check-deployment.yml`](../.github/workflows/check-deployment.yml)
+runs it weekly and on demand. It is deliberately not on the PR path, for the
+reason given in [CONTRIBUTING.md](../CONTRIBUTING.md#the-reproducibility-job): a
+change that touches no deployment state would fail here for reasons unrelated
+to itself.
+
+**This checks the document against the chain, not the chain against the
+source.** Whether the recorded wasm hashes come from the code in this
+repository is [#93](https://github.com/use-assay/Assay/issues/93), which is
+still open and needs a reproducible build rather than a ledger read.
+
 ## Redeploying
 
 A rebuilt wasm only reproduces the recorded hashes if it comes from the same
