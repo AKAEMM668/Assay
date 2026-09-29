@@ -145,6 +145,13 @@ jobs:
       - name: cargo test
         run: cargo test
 
+      - name: check contract test snapshots
+        run: |
+          if ! git diff --exit-code -- contracts/example-gate/test_snapshots contracts/safety-registry/test_snapshots; then
+            echo "::error::Contract tests modified committed snapshots. Review the changed files and commit intentional snapshot updates."
+            exit 1
+          fi
+
   # Merge gate: catches PRs that touch maintainer-owned safety-critical paths
   # without manual review. A PR touching only docs or tests merges cleanly;
   # one touching the severity model, the evidence_hash encoding, or the
