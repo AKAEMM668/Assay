@@ -39,6 +39,9 @@ jobs:
       - name: build
         run: go build ./...
 
+      - name: test merge gate
+        run: make test-gate
+
       # Tests must pass without network access: every check is a pure function
       # over fixtures captured under internal/*/testdata.
       #

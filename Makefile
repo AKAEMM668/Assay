@@ -13,7 +13,7 @@ CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 .PHONY: all build test cover lint fmt vet run clean \
 	contract-test contract-lint contract-build \
 	build-contract deploy-testnet attest read verify-gate \
-	eval-record eval-compare
+	test-gate eval-record eval-compare
 
 all: build
 
@@ -106,6 +106,9 @@ read:
 verify-gate:
 	@test -n "$(BASE)" || { echo 'usage: make verify-gate BASE=<sha-or-ref> HEAD=<sha-or-ref>'; exit 2; }
 	./scripts/merge-gate.sh "$(BASE)" "$(HEAD)"
+
+test-gate:
+	bash ./scripts/test-merge-gate.sh
 
 # Records the labelled corpus's classification, per subject and per check.
 # Commit the result when the classifier's output is intended to change; it is
