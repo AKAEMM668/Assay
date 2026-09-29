@@ -48,6 +48,13 @@ make cover    # per-package coverage table, lowest first
 make run      # start the API on :8080
 ```
 
+Shell scripts are checked with ShellCheck at warning severity in CI. Run the
+same check locally from the repository root:
+
+```sh
+find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0 | xargs -0 shellcheck -S warning
+```
+
 The Soroban side, which needs the [stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup):
 
 ```sh
