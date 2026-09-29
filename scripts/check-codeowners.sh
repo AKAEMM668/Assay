@@ -21,7 +21,6 @@ codeowners_paths=$(awk '
     {
         path = $1
         sub(/^\/+/, "", path)
-        sub(/\/+$/, "", path)
         print path
     }
     END { if (invalid) exit 1 }

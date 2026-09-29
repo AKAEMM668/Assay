@@ -8,7 +8,7 @@
 /internal/mechanics/check_reputation.go @use-assay/maintainers
 /internal/mechanics/check_domain.go @use-assay/maintainers
 /internal/mechanics/eval_test.go @use-assay/maintainers
-/internal/mechanics/testdata/ @use-assay/maintainers
+/internal/mechanics/testdata @use-assay/maintainers
 /internal/scan/scan.go @use-assay/maintainers
 /internal/stellarexpert/client.go @use-assay/maintainers
 /internal/horizon/client.go @use-assay/maintainers
@@ -20,4 +20,4 @@
 /assay-contracts/contracts/example-gate/src/lib.rs @use-assay/maintainers
 /scripts/merge-gate.sh @use-assay/maintainers
 /scripts/check-codeowners.sh @use-assay/maintainers
-/.github/workflows/ @use-assay/maintainers
+/.github/workflows @use-assay/maintainers
