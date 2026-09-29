@@ -161,7 +161,9 @@ not support.
 
 Tests must not require network access. Fetchers are interfaces; tests use
 fixtures captured from real responses under `internal/*/testdata/`. When you
-capture a new fixture, note the date and the URL it came from.
+capture a new fixture, note the date and the URL it came from. Which of the
+three test styles applies where — and why the fixture loader cannot express a
+fetch error — is in [docs/testing.md](docs/testing.md).
 
 ### The reproducibility job
 
