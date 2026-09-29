@@ -230,6 +230,18 @@ impl SafetyRegistry {
             evidence_hash,
             attested_at,
         };
+        env.storage()
+            .persistent()
+            .set(&DataKey::Safety(asset.clone()), &safety);
+
+        // Extend TTL to maximum so the attestation persists until explicitly
+        // overwritten. Freshness is enforced by the caller via max_age_secs on
+        // is_safe, not by storage expiry.
+        env.storage().persistent().extend_ttl(
+            &DataKey::Safety(asset),
+            100,
+            env.storage().max_ttl(),
+        );
         let key = DataKey::Safety(asset.clone());
         env.storage().persistent().set(&key, &safety);
         extend_attestation(&env, &key);
@@ -290,6 +302,16 @@ impl SafetyRegistry {
     /// collapsing the two would make every unknown asset read as safe, which is
     /// the single worst failure this contract could have.
     ///
+    /// Archived entries (TTL expired) are automatically restored per CAP-0066 /
+    /// Protocol 23 when accessed. After restoration, the entry returns
+    /// `Some(Safety)` with the original `attested_at` timestamp. This makes
+    /// archived entries distinguishable from never-attested ones:
+    /// - Never attested: returns `None`
+    /// - Archived (restored): returns `Some(Safety)` with original `attested_at`
+    ///
+    /// The `attest` function extends the TTL to the maximum on every write, so
+    /// archival should not occur in normal operation. Freshness is enforced by
+    /// the caller via `max_age_secs` on `is_safe`, not by storage expiry.
     /// `None` also covers a revoked attestation: storage keeps no tombstone,
     /// so a caller cannot tell revoked from never attested. Both mean "no
     /// claim stands", and both fail closed.
@@ -308,6 +330,16 @@ impl SafetyRegistry {
     /// attested, stale, too severe, or inconsistent. The safe answer is the
     /// default, so a caller that gets the arguments wrong blocks rather than
     /// admits.
+    ///
+    /// Failure modes (all return `false`):
+    /// - Never attested: `get_safety` returns `None`
+    /// - Stale: `attested_at` older than `max_age_secs`
+    /// - Too severe: `severity > max_severity`
+    /// - Inconsistent: clawback capability attested below `SEVERITY_HIGH`
+    ///
+    /// A caller that needs to diagnose why a gate rejected can call
+    /// `get_safety` directly: `None` means never attested; `Some(Safety)`
+    /// with an old `attested_at` means the attestation has lapsed.
     ///
     /// `max_age_secs` of 0 disables the freshness requirement.
     pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool {
