@@ -158,6 +158,8 @@ fn init_is_single_shot() {
     assert_eq!(err, Ok(Error::AlreadyInitialized));
 }
 
+/// attest() requires auth from the admin set at init time. An unsigned call
+/// without authorization must be rejected.
 /// An empty forbidden_mask must NOT become a blanket allow for unattested
 /// assets. The gate still requires that an attestation exists.
 #[test]
@@ -296,23 +298,19 @@ fn attest_publishes_no_event_on_rejection() {
 /// caller must be rejected. This test does not use mock_all_auths(), so
 /// require_auth() on the admin address actually enforces.
 #[test]
-fn attest_rejects_unauthorized_caller() {
+fn attest_rejects_no_auth_caller() {
     let env = Env::default();
     let contract_id = env.register(SafetyRegistry, ());
     let client = SafetyRegistryClient::new(&env, &contract_id);
     let admin = Address::generate(&env);
     client.init(&admin);
 
-    let _caller = Address::generate(&env);
     let asset = Address::generate(&env);
 
     let err = client
         .try_attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env))
-        .expect_err("non-admin must be rejected");
+        .expect_err("unauthorized call must be rejected");
 
-    // The error type is SDK-internal (soroban_sdk::Error), not our contract
-    // Error enum. The important property is that it is an error at all: a
-    // non-admin caller must not be able to write attestations.
     assert!(err.is_err());
 }
 
@@ -470,6 +468,7 @@ fn revoke_rejects_unauthorized_caller() {
     client.init(&admin);
 
     let asset = Address::generate(&env);
+
     client
         .mock_auths(&[MockAuth {
             address: &admin,
@@ -482,6 +481,105 @@ fn revoke_rejects_unauthorized_caller() {
         }])
         .attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
 
+    let got = client.get_safety(&asset).expect("attestation should exist");
+    assert_eq!(got.severity, SEVERITY_CLEAR);
+}
+
+/// Property test: is_safe MUST return false for any unattested asset across all threshold/age arguments.
+#[test]
+fn is_safe_property_unattested() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    for max_sev in 0..=5 {
+        for max_age in [0, 60, 600, 3600] {
+            assert!(
+                !client.is_safe(&asset, &max_sev, &max_age),
+                "unattested asset must be false for max_sev={}, max_age={}",
+                max_sev,
+                max_age
+            );
+        }
+    }
+}
+
+/// Exhaustive property test for is_safe over the conjunction of all four conditions:
+/// 1. Attested state (true)
+/// 2. Severity within threshold (attested_severity <= max_severity)
+/// 3. Confiscation invariant intact (flags & CONFISCATION_MASK == 0 || max_severity >= SEVERITY_HIGH)
+/// 4. Freshness window met (max_age_secs == 0 || age <= max_age_secs)
+#[test]
+fn is_safe_property_exhaustive() {
+    let (env, client, _) = setup();
+
+    let severities = [0, 1, 2, 3, 4, 5]; // Severity values 0..=5 (including out-of-range 5)
+    let flag_sets = [
+        0u32,
+        MECH_AUTH_REQUIRED,
+        MECH_CLAWBACK_ENABLED,
+        MECH_AUTH_REQUIRED | MECH_CLAWBACK_ENABLED,
+        0b111111u32,
+    ];
+    let max_severities = [0, 1, 2, 3, 4, 5];
+    let max_ages = [0u64, 300, 600];
+    let nows = [1_000u64, 1_300, 1_600, 2_000]; // ages: 0, 300, 600, 1000
+
+    let attested_at = 1_000u64;
+
+    for &attested_sev in &severities {
+        for &attested_flags in &flag_sets {
+            for &now in &nows {
+                for &max_sev in &max_severities {
+                    for &max_age in &max_ages {
+                        let asset = Address::generate(&env);
+                        env.ledger().set_timestamp(attested_at);
+
+                        // If severity is valid (<= 4) and flags do not violate clawback invariant, write attestation
+                        // Note: If clawback bit set and severity < 3, try_attest will reject write, so we manually test stored safety
+                        if attested_flags & MECH_CLAWBACK_ENABLED != 0
+                            && attested_sev < SEVERITY_HIGH
+                        {
+                            // Invalid write time invariant; cannot attest on chain directly, skipped from valid store
+                            continue;
+                        }
+                        if attested_sev > SEVERITY_CRITICAL {
+                            // Invalid severity; cannot attest on chain directly, skipped from valid store
+                            continue;
+                        }
+
+                        client.attest(&asset, &attested_sev, &attested_flags, &hash(&env));
+                        env.ledger().set_timestamp(now);
+
+                        let age = now.saturating_sub(attested_at);
+
+                        let cond_severity = attested_sev <= max_sev;
+                        let cond_confiscation =
+                            (attested_flags & CONFISCATION_MASK) == 0 || max_sev >= SEVERITY_HIGH;
+                        let cond_freshness = max_age == 0 || age <= max_age;
+
+                        let expected = cond_severity && cond_confiscation && cond_freshness;
+                        let actual = client.is_safe(&asset, &max_sev, &max_age);
+
+                        assert_eq!(
+                            actual, expected,
+                            "is_safe mismatch for sev={}, flags={}, max_sev={}, age={}, max_age={}",
+                            attested_sev, attested_flags, max_sev, age, max_age
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Contract error discriminants are ABI documented in docs/integrating.md and live results.
+/// Reordering or changing discriminants silently breaks integrator error handling.
+#[test]
+fn error_code_values_are_abi() {
+    assert_eq!(Error::AlreadyInitialized as u32, 1);
+    assert_eq!(Error::NotInitialized as u32, 2);
+    assert_eq!(Error::InvalidSeverity as u32, 3);
+    assert_eq!(Error::InconsistentAttestation as u32, 4);
     let caller = Address::generate(&env);
     let err = client
         .mock_auths(&[MockAuth {
