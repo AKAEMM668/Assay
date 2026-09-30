@@ -292,6 +292,16 @@ number change.
 
 Then record the result and the reasoning in [docs/eval.md](eval.md).
 
+### Verifying the eval
+
+After adding a subject, run `make eval` and confirm the confusion matrix
+shows agreement for the new subject's severity level and checks. See the
+**Running the evaluation** section in [docs/eval.md](eval.md) for how to
+interpret the output. A disagreement may indicate the label is wrong
+rather than the code — check the provenance before assuming the classifier
+is at fault. See the section on **A disagreement may indicate a wrong label**
+in [docs/eval.md](eval.md).
+
 ## Verify before you encode
 
 **Never encode a flag name, field name, or endpoint you did not verify against a

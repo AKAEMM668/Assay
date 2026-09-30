@@ -262,6 +262,84 @@ Run `make eval-record` when the output is intended to change; the baseline is
 what a reviewer diffs against. Run `make eval-compare STRICT=1` to make any
 movement fail the command.
 
+## Running the evaluation
+
+The eval is a Go program that classifies every subject in the labelled
+corpus and compares the result against the known labels. It uses
+captured fixtures only — no network access is required.
+
+```sh
+make eval          # print the confusion matrix with precision/recall caveat
+make test          # run TestEval and TestEvalPerCheck (asserts every row)
+```
+
+`make eval` prints a confusion matrix showing agreements, disagreements,
+and undetermined counts per severity level and per check. Sample size is
+printed with every row so the contributor can judge whether the corpus is
+large enough to trust the figures.
+
+### Reading the output
+
+The matrix has two tables:
+
+- **severity level agreement** — for each base severity in the corpus,
+  how many subjects the classifier agreed with the label, disagreed,
+  or left undetermined.
+- **check agreement** — for each check (capability, mutability,
+  sep1-domain, reputation), how many findings matched their label,
+  disagreed, or were undetermined.
+
+Every row includes `sample_size`: the number of subjects at that
+severity level (or the number of subjects whose label includes that
+check). If `sample_size` is small, the counts are illustrative and must
+not be cited as evidence of classifier accuracy.
+
+**Undetermined is its own outcome.** An undetermined scan is never
+folded into agreement or disagreement. It means a source the check
+depends on was unreachable, so the classifier could not produce a
+conclusion. An undetermined result is not a failure — it means the
+run was incomplete and should be retried or the missing source
+investigated.
+
+### A disagreement may indicate a wrong label
+
+When a subject disagrees with its label, that does not automatically
+mean the code is wrong. The label itself may be incorrect:
+
+- The provenance may be stale because the issuer changed its flags
+  after the fixture was captured.
+- The label may rest on an assumption that has since been disproven
+  (for example, a domain that was once malicious may now be clean).
+
+Before assuming the classifier is wrong, check the fixture against the
+live source and review the provenance in
+[`internal/mechanics/testdata/PROVENANCE.md`](../internal/mechanics/testdata/PROVENANCE.md).
+If the label needs correction, see the label change process in the
+dataset labeling section below.
+
+### Cross-version comparison
+
+Any change to a check can move verdicts, and pass/fail against fixed
+expectations cannot show *what* moved. `make eval-record` writes the full
+classifier output for the corpus — per subject, per check, with the bound check
+set — to [`docs/eval-baseline.json`](eval-baseline.json), tagged with the scanner
+version. `make eval-compare` records the current run and diffs it against that
+baseline, reporting severity, mechanic and evidence movements separately.
+
+Three rules keep the diff honest:
+
+- A subject **undetermined** in either run is reported as undetermined and
+excluded from the movement counts: an answer that was never reached cannot have
+moved.
+- A subject present in only one run is reported as **added** or **removed**, not
+dropped.
+- Evidence movements are reported as digests of the sorted claims, excluding
+retrieval times, so a re-run of unchanged evidence does not show as a change.
+
+Run `make eval-record` when the output is intended to change; the baseline is
+what a reviewer diffs against. Run `make eval-compare STRICT=1` to make any
+movement fail the command.
+
 ## Coverage gaps
 
 Stated plainly, because an eval that hides its gaps is marketing.
