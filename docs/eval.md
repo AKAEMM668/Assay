@@ -31,6 +31,7 @@ with provenance recorded in
 | `BERKSHIRE` (nasdaq.finance) | trap | Impersonation asset with clawback. Confiscation capability *and* confirmed-bad reputation. |
 | `DOGE` (darkpool.digital) | trap | Known scam carrying **no auth flags**. The case that justifies the second axis. |
 | `DOGE` (reputation outage) | **degraded** | The same real scam as the row above, captured with the StellarExpert directory unavailable. Neither legitimate nor trap: the correct answer is **undetermined**, and the subject exists so a source outage can never again be reported as a clean result (issue #23). |
+| `VELO` (no domain) | legitimate | An issuer account with no `home_domain` at all — the field is absent from the ledger record. Nothing was ever claimed, so accountability must be `unknown` rather than `unverified`, and severity must stay `clear` (#3). |
 
 ## Results
 
@@ -47,10 +48,11 @@ row on each test run, so the table cannot drift from the code without a red test
 | berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | false | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
 | doge-noflags-scam | `DOGE` | clear | **critical** | true | false | unverified | `domain_unverified`, `blocklisted` |
 | doge-reputation-outage | `DOGE` | clear | **clear** | false | **true** | unverified | `domain_unverified` |
+| velo-no-home-domain | `VELO` | clear | **clear** | false | false | unknown | `domain_unverified` |
 
-The last row is the point of the `Undetermined` column: its severity is the
-capability floor, exactly as if nothing were wrong, and the `true` is what stops
-that floor from being read as a clean answer.
+The `doge-reputation-outage` row is the point of the `Undetermined` column: its
+severity is the capability floor, exactly as if nothing were wrong, and the
+`true` is what stops that floor from being read as a clean answer.
 
 ## What each result proves
 
@@ -122,6 +124,19 @@ history that the labelled set structurally could not express. It can now, and
 if a future change makes an outage render as clear again, `TestEval` and
 `TestEvalPerCheck` both go red.
 
+### DOGE (contradictory sources) — handling disagreeing reputation sources
+
+`base: clear` → `final: critical`, escalated.
+
+A regression fixture where consumed reputation sources disagree: StellarExpert's
+`blocked-domains` returns `blocked=false` for `darkpool.digital`, while the
+`directory` tags the issuer as `malicious` and `unsafe`.
+
+Assay consumes both sources and escalates if *either* source flags evidence of
+abuse. Requiring agreement between sources would silently drop known scams when
+one source is incomplete or delayed. This fixture proves that escalation fires
+despite the disagreement.
+
 ### BERKSHIRE — both axes firing
 
 `base: high` → `final: critical`, escalated.
@@ -151,6 +166,22 @@ is not a power over holders. It is reported as its own finding instead, and this
 subject is here so the unlocked branch is pinned by the eval rather than only by
 a unit test.
 
+### VELO — no claim, not a failed claim
+
+`clear`, not escalated, `accountability: unknown`.
+
+The issuer account carries no `home_domain` — Horizon omits the field
+entirely — so there is no published identity and no stellar.toml to read.
+That is a third state, distinct from both verification (`AQUA`) and a failed
+verification (`USDC`): nobody has made a claim, so nobody has failed one.
+Accountability records it as `unknown`, never `unverified`, because
+`unverified` would assert an attempt that never happened.
+
+It is also the proof that the distinction does not buy a severity discount in
+disguise: identical flags to `aqua-clear-verified`, identical `clear` result.
+The `domain_unverified` bit still appears, because no identity was published
+to verify against. This subject is the fixture for issue #3.
+
 ## Per-check evaluation
 
 An aggregate verdict can be right for the wrong reason: if the capability check
@@ -177,13 +208,72 @@ Measured per-check output (same fixtures as the table above):
 | berkshire-clawback-scam | high, `auth_revocable`, `auth_clawback_enabled` | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-noflags-scam | clear | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-reputation-outage | clear | clear | unverified, `domain_unverified` | **undetermined** |
+| velo-no-home-domain | clear | clear | unknown, `domain_unverified` | clear (escalation axis) |
 
 The `reputation` column carries the escalation axis: its finding is `clear` with
 `escalation: true` when nothing is flagged, and `critical` with `blocklisted`
 when it is. That is the one check permitted to escalate, and per-check labels
-keep it from hiding a capability error. The degraded subject's reputation
-finding is compared against an **undetermined** label rather than a severity,
-because a check that could not conclude makes no severity claim.
+keep it from hiding a capability error. For a degraded subject
+(`synthetic-reputation-outage`, `doge-reputation-outage`) the reputation cell is
+**undetermined**: the source was consulted and failed, so the finding makes no
+severity claim at all — it is compared against its `Undetermined` label, not
+against a level.
+
+### synthetic-reputation-outage — the degraded scan
+
+`base: clear` → `final: clear`, `undetermined: true`, not attestable.
+
+The issue behind #23 was a subject whose reputation source was unreachable
+scanning as a clean answer. `TestOutageDoesNotRenderAsNotListed` and its
+companions pin the behaviour over hand-built subjects, because the fixture
+loader used to render an outage as a clean absence: a missing `blocked.json`
+was indistinguishable from a source that was never asked. With the error-marker
+convention below, the labelled set can state the difference itself, and
+`TestEvalDegradedSubjectIsUndeterminedNotClear` pins it end to end:
+
+- the reputation finding is **undetermined**, not clear — `not listed` was
+  never observed;
+- the report carries `undetermined: true` and names `reputation` in
+  `undetermined_checks`, so a JSON consumer sees a partial answer;
+- severity stays at the measured capability — the outage must not be answered
+  by inventing a level either;
+- `attest.FromReport` refuses the report (`ErrUndetermined`), because a partial
+  scan must never reach the chain.
+
+This subject is also why the corpus's undetermined handling is not hypothetical:
+`make eval-compare` reports it as undetermined and excludes it from movement
+counts, exactly as it would a live degraded run.
+
+## Fixture conventions
+
+Each subject directory holds the captured answer of every consumed source. A
+source is expressed in one of three states, and the loader
+([`internal/eval/load.go`](../internal/eval/load.go)) maps them to the Subject
+fields the checks read:
+
+| State | Fixture | Loader sets |
+| --- | --- | --- |
+| **valid** — the source answered | payload file present: `stellar.toml`, `directory.json`, `blocked.json` | the parsed payload and the source's `FetchedAt` |
+| **unavailable** — the source was consulted and failed | error marker present: `stellar.toml.status`, `directory.err`, `blocked.err` | the matching `*Err` field, verbatim marker text, and `*AttemptedAt` |
+| **missing** — the source was not consulted | neither file | neither the payload nor an `Err` |
+
+The error marker convention extends the existing `stellar.toml.status` pattern:
+the file's trimmed text is what the live fetcher would have recorded — an HTTP
+status number for a status failure (`429`), or any error text for a transport
+failure. A blank marker is treated as absent, never as an empty error.
+
+The distinction is the point. A missing `blocked.json` and a `blocked.err`
+holding `429` used to produce the same Subject, which made the degraded state
+inexpressible in the labelled set. The three states are pinned by
+`TestEvalLoaderStates`, and the unavailable state by the degraded subject in
+the corpus. `synthetic-`-prefixed directories mark fixtures assembled for a
+property under test rather than captured from a live asset; their provenance
+is recorded in the directory's README and in
+[`internal/mechanics/testdata/PROVENANCE.md`](../internal/mechanics/testdata/PROVENANCE.md).
+
+A fixture should carry at most one of a source's three states. If a payload and
+its error marker are both present, the payload wins, matching the existing
+`stellar.toml` precedence.
 
 ## Cross-version comparison
 
@@ -208,13 +298,68 @@ Run `make eval-record` when the output is intended to change; the baseline is
 what a reviewer diffs against. Run `make eval-compare STRICT=1` to make any
 movement fail the command.
 
+## Running the evaluation
+
+The eval is a Go program that classifies every subject in the labelled
+corpus and compares the result against the known labels. It uses
+captured fixtures only — no network access is required.
+
+```sh
+make eval          # print the confusion matrix with precision/recall caveat
+make test          # run TestEval and TestEvalPerCheck (asserts every row)
+```
+
+`make eval` prints a confusion matrix showing agreements, disagreements,
+and undetermined counts per severity level and per check. Sample size is
+printed with every row so the contributor can judge whether the corpus is
+large enough to trust the figures.
+
+### Reading the output
+
+The matrix has two tables:
+
+- **severity level agreement** — for each base severity in the corpus,
+  how many subjects the classifier agreed with the label, disagreed,
+  or left undetermined.
+- **check agreement** — for each check (capability, mutability,
+  sep1-domain, reputation), how many findings matched their label,
+  disagreed, or were undetermined.
+
+Every row includes `sample_size`: the number of subjects at that
+severity level (or the number of subjects whose label includes that
+check). If `sample_size` is small, the counts are illustrative and must
+not be cited as evidence of classifier accuracy.
+
+**Undetermined is its own outcome.** An undetermined scan is never
+folded into agreement or disagreement. It means a source the check
+depends on was unreachable, so the classifier could not produce a
+conclusion. An undetermined result is not a failure — it means the
+run was incomplete and should be retried or the missing source
+investigated.
+
+### A disagreement may indicate a wrong label
+
+When a subject disagrees with its label, that does not automatically
+mean the code is wrong. The label itself may be incorrect:
+
+- The provenance may be stale because the issuer changed its flags
+  after the fixture was captured.
+- The label may rest on an assumption that has since been disproven
+  (for example, a domain that was once malicious may now be clean).
+
+Before assuming the classifier is wrong, check the fixture against the
+live source and review the provenance in
+[`internal/mechanics/testdata/PROVENANCE.md`](../internal/mechanics/testdata/PROVENANCE.md).
+If the label needs correction, see the label change process in the
+dataset labeling section below.
+
 ## Coverage gaps
 
 Stated plainly, because an eval that hides its gaps is marketing.
 
-- **Eight subjects, seven assets.** Enough to pin the judgment boundaries, not
+- **Nine subjects, eight assets.** Enough to pin the judgment boundaries, not
   enough for a statistical claim. No precision/recall numbers are quoted,
-  because eight subjects cannot support them. (`DOGE` appears twice: once as
+  because nine subjects cannot support them. (`DOGE` appears twice: once as
   the live trap, once as the reputation-outage variant.)
 - **~~No legitimately-clawback-enabled asset~~ Closed 2026-09-27.**
   `USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR` (Zeam Money)
@@ -235,41 +380,13 @@ Stated plainly, because an eval that hides its gaps is marketing.
   judgment, so a live asset's real classification can drift from the fixture's;
   re-capture before citing a specific asset's current state.
 
-## Fixture convention
-
-Every subject is a directory under `internal/mechanics/testdata`. For each
-source the checks consume, the fixture records one of three states, and
-`eval.LoadSubject` maps them to exactly the three states a live scan produces:
-
-| state | on disk | meaning | loader result |
-| --- | --- | --- | --- |
-| **valid** | `stellar.toml`, `directory.json`, `blocked.json` present | the source answered | payload field set (`Toml`, `Directory`, `Blocked`) |
-| **missing** | no file for that source | the source was never consulted | field nil, `*Err` empty |
-| **unavailable** | `stellar.toml.status`, `directory.err`, `blocked.err` present | the source was asked and failed | field nil, `*Err` set to the marker text |
-
-`stellar.toml.status` holds an HTTP status (for example `404`), which the loader
-renders as `"status 404"`. `directory.err` and `blocked.err` hold the failure
-text the live client would have returned, for example
-`stellarexpert: get <url>: status 429`. The marker text is recorded verbatim, so
-it reaches the report's attributed evidence unchanged.
-
-The three states are not cosmetic. **Missing** means "not consulted";
-**unavailable** means "consulted and did not answer". Before `directory.err`
-existed the two were the same `Subject`, which is how an outage was once
-reported as a clean reputation result (#23). A fixture with `directory.err`
-makes the reputation check undetermined, and `TestEval` / `TestEvalPerCheck`
-assert that (`doge-reputation-outage`).
-
-A fixture should carry at most one of a source's three states. If a payload and
-its error marker are both present, the payload wins, matching the existing
-`stellar.toml` precedence.
-
 ## Adding a subject
 
-1. Capture fixtures for the asset and record provenance. If a source failed at
-   capture time, write its error marker (`directory.err`, `blocked.err`) instead
-   of omitting the file, so a later reader can tell an outage from a source that
-   was never consulted.
+1. Capture fixtures for the asset and record provenance, following
+   [Capturing a fixture](adding-a-check.md#capturing-a-fixture). If a source
+   failed at capture time, write its error marker (`directory.err`,
+   `blocked.err`) instead of omitting the file, so a later reader can tell an
+   outage from a source that was never consulted.
 2. Add a case to `TestEval` with the expected base, final, escalation, and
    accountability — and a `why` string stating what the case proves. The `why`
    is printed on failure, so a future maintainer learns what they broke.
@@ -308,8 +425,11 @@ Apache-2.0 and upstream payloads remain subject to their providers' terms.
 
 ### Point-in-time refresh pipeline
 
-1. Re-fetch every URL in the manifest and record one UTC capture date for the
-  refresh.
+1. Re-fetch the URLs recorded for a subject and record one UTC capture date for
+  the refresh. `make refresh-fixture SUBJECT=<dir>` does this from the URLs in
+  `PROVENANCE.md`, prints the diff for review, and updates the capture date in
+  both `PROVENANCE.md` and the manifest. A source that fails aborts before
+  anything is written, so a fixture is never left partial.
 2. Store only payloads whose current provider terms permit redistribution. For
   uncertain StellarExpert or issuer material, retain the URL and derived
   annotation rather than adding a new raw copy.
