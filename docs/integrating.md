@@ -131,13 +131,10 @@ use assay_safety_registry::{CAPABILITY_MASK, MECH_AUTH_REVOCABLE, MECH_CLAWBACK_
 /// and the policy masks below; picking bits by hand is how #26 happened.
 pub const REFUSED_MECHANICS: u32 = MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED;
 
-/// The other half. Without this, an asset that is critical purely by
-/// reputation — no capability bits set — passes the mask above and is
-/// admitted. See DOGE in the previous section.
+/// Documented defaults for the deployed gate. These are not hidden globals;
+/// they are stored in instance state at construction and are therefore visible
+/// to every caller and reviewer.
 pub const MAX_SEVERITY: u32 = 2;
-
-/// Your policy, not Assay's. A deposit gate and a large settlement should not
-/// be forced to agree on how fresh is fresh enough.
 pub const MAX_ATTESTATION_AGE: u64 = 24 * 60 * 60;
 
 fn assert_safe(env: &Env, registry: &Address, asset: &Address) -> Result<(), Error> {
@@ -215,8 +212,21 @@ Take the registry address as a constructor argument rather than hardcoding it,
 so the same wasm works on both networks:
 
 ```rust
-pub fn __constructor(env: Env, registry: Address) {
+pub fn __constructor(
+    env: Env,
+    registry: Address,
+    max_severity: u32,
+    max_age_secs: u64,
+    refused_mechanics: u32,
+) -> Result<(), Error> {
+    if max_severity > 4 {
+        return Err(Error::InvalidPolicy);
+    }
     env.storage().instance().set(&DataKey::Registry, &registry);
+    env.storage().instance().set(&DataKey::MaxSeverity, &max_severity);
+    env.storage().instance().set(&DataKey::MaxAttestationAge, &max_age_secs);
+    env.storage().instance().set(&DataKey::RefusedMechanics, &refused_mechanics);
+    Ok(())
 }
 ```
 

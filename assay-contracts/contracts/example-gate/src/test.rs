@@ -26,7 +26,10 @@ fn setup() -> Fixture<'static> {
     let registry = RegistryClient::new(&env, &registry_id);
     registry.init(&Address::generate(&env));
 
-    let gate_id = env.register(ExampleGate, (registry_id,));
+    let gate_id = env.register(
+        ExampleGate,
+        (registry_id, DEFAULT_MAX_SEVERITY, DEFAULT_MAX_ATTESTATION_AGE, DEFAULT_REFUSED_MECHANICS),
+    );
     let gate = ExampleGateClient::new(&env, &gate_id);
 
     Fixture {

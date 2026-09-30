@@ -404,6 +404,55 @@ func VerifyParams(p Params, expected []string) CheckSetVerification {
 	return verifyChecks(p.Checks, expected)
 }
 
+// HashStatus describes the result of comparing a report's evidence hash with a
+// claimed digest.
+type HashStatus string
+
+const (
+	// HashUnknown means there is no authoritative digest to compare, such as an
+	// undetermined or unevaluated report.
+	HashUnknown HashStatus = "unknown"
+	// HashMatched means the report reproduces the claimed digest exactly.
+	HashMatched HashStatus = "matched"
+	// HashMismatch means the report differs in a way that constitutes tampering or
+	// drift from the claimed evidence bundle.
+	HashMismatch HashStatus = "mismatch"
+)
+
+// HashVerification is the result of comparing a report's recomputed evidence
+// hash against a claimed digest.
+type HashVerification struct {
+	Status  HashStatus
+	Got     string
+	Want    string
+	Reason  string
+	Present []string
+}
+
+// VerifyHash checks whether a report reproduces the claimed evidence hash.
+//
+// An undetermined report never has a valid digest to compare and is reported as
+// unknown rather than as tampered. Any material difference in the canonical
+// preimage returns a mismatch status with the recomputed digest, so callers can
+// distinguish an attestation whose evidence changed from one whose auth state is
+// merely unresolved.
+func VerifyHash(rep *mechanics.Report, expected string) HashVerification {
+	if rep == nil || rep.Undetermined || rep.Severity == mechanics.Unevaluated || rep.Base == mechanics.Unevaluated {
+		return HashVerification{Status: HashUnknown, Want: expected, Reason: "report is undetermined or unevaluated"}
+	}
+	if expected == "" {
+		return HashVerification{Status: HashUnknown, Want: expected, Reason: "no evidence hash was supplied"}
+	}
+	p, err := FromReport(rep)
+	if err != nil {
+		return HashVerification{Status: HashUnknown, Want: expected, Reason: err.Error()}
+	}
+	if p.EvidenceHash == expected {
+		return HashVerification{Status: HashMatched, Got: p.EvidenceHash, Want: expected, Reason: "evidence hash matches the canonical preimage"}
+	}
+	return HashVerification{Status: HashMismatch, Got: p.EvidenceHash, Want: expected, Reason: "recomputed evidence hash differs from the claimed digest"}
+}
+
 func verifyChecks(present, expected []string) CheckSetVerification {
 	if len(present) == 0 {
 		return CheckSetVerification{Status: CheckSetUnknown}

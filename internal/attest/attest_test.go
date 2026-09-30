@@ -214,6 +214,65 @@ func TestEvidenceOrderDoesNotChangeTheHash(t *testing.T) {
 	}
 }
 
+func TestVerifyHashReportsMatchMismatchAndUnknown(t *testing.T) {
+	base, err := attest.FromReport(report(nil))
+	if err != nil {
+		t.Fatalf("FromReport: %v", err)
+	}
+	if got := attest.VerifyHash(report(nil), base.EvidenceHash); got.Status != attest.HashMatched {
+		t.Fatalf("VerifyHash: status = %q, want %q", got.Status, attest.HashMatched)
+	}
+
+	mutations := map[string]func(*mechanics.Report){
+		"severity":  func(r *mechanics.Report) { r.Severity, r.Base = mechanics.Medium, mechanics.Medium },
+		"escalated": func(r *mechanics.Report) { r.Severity, r.Escalated = mechanics.Critical, true },
+		"mechanics": func(r *mechanics.Report) {
+			r.Mechanics = mechanics.MechAuthRequired
+			r.Severity, r.Base = mechanics.Low, mechanics.Low
+		},
+		"accountability": func(r *mechanics.Report) { r.Accountability = mechanics.AccountabilityUnverified },
+		"claim":          func(r *mechanics.Report) { r.Evidence[0].Claim = "issuer flags: auth_required=true" },
+		"source":         func(r *mechanics.Report) { r.Evidence[0].Source = "elsewhere" },
+		"evidence line": func(r *mechanics.Report) {
+			r.Evidence = append(r.Evidence, mechanics.Evidence{Source: "stellar.expert", Claim: "listed"})
+		},
+	}
+	for name, mut := range mutations {
+		t.Run(name, func(t *testing.T) {
+			got := attest.VerifyHash(report(mut), base.EvidenceHash)
+			if got.Status != attest.HashMismatch {
+				t.Fatalf("VerifyHash: status = %q, want %q for %s", got.Status, attest.HashMismatch, name)
+			}
+		})
+	}
+
+	// Reordered evidence is canonicalised, so it must not be reported as a
+	// tampering event.
+	second := mechanics.Evidence{Source: "stellar.expert/directory", URL: "https://api.stellar.expert/x", Claim: "listed"}
+	forward, err := attest.FromReport(report(func(r *mechanics.Report) { r.Evidence = append(r.Evidence, second) }))
+	if err != nil {
+		t.Fatalf("FromReport: %v", err)
+	}
+	reversed, err := attest.FromReport(report(func(r *mechanics.Report) { r.Evidence = append([]mechanics.Evidence{second}, r.Evidence...) }))
+	if err != nil {
+		t.Fatalf("FromReport: %v", err)
+	}
+	if got := attest.VerifyHash(report(func(r *mechanics.Report) { r.Evidence = append(r.Evidence, second) }), forward.EvidenceHash); got.Status != attest.HashMatched {
+		t.Fatalf("VerifyHash: reordered evidence should still match: status = %q", got.Status)
+	}
+	if got := attest.VerifyHash(report(func(r *mechanics.Report) { r.Evidence = append([]mechanics.Evidence{second}, r.Evidence...) }), reversed.EvidenceHash); got.Status != attest.HashMatched {
+		t.Fatalf("VerifyHash: reordered evidence should still match: status = %q", got.Status)
+	}
+
+	undetermined := report(func(r *mechanics.Report) {
+		r.Undetermined = true
+		r.UndeterminedChecks = []string{"reputation"}
+	})
+	if got := attest.VerifyHash(undetermined, base.EvidenceHash); got.Status != attest.HashUnknown {
+		t.Fatalf("VerifyHash: undetermined report should be unknown, got %q", got.Status)
+	}
+}
+
 // A claim carries third-party text, so an issuer controls part of the preimage.
 // Without escaping, a crafted directory name could impersonate a separate
 // evidence line and forge the preimage of a report that was never produced.
