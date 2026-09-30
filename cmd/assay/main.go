@@ -15,6 +15,10 @@ import (
 
 	"github.com/use-assay/assay/internal/api"
 	"github.com/use-assay/assay/internal/attest"
+	// Aliased because this file already has a local history() for the CLI's
+	// evidence view; this package is the persisted observation store behind the
+	// HTTP endpoint, a different thing.
+	historystore "github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 )
@@ -62,6 +66,17 @@ func usage(w io.Writer) {
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr]             serve the HTTP API and UI
+
+Every command that scans accepts:
+  -cache-directory-ttl D   reuse a curated directory answer for D (0 disables)
+  -cache-blocklist-ttl D   reuse a blocklist answer for D (0 disables)
+  -no-cache                re-fetch curated sources on every scan
+  assay serve [-addr] [-history PATH]
+                                  serve the HTTP API and UI
+
+Commands that scan also accept:
+  -asset-lists URL[,URL...]       SEP-0042 Stellar Asset Lists to consume
+                                  (repeatable). No list is used by default.
 `)
 }
 
@@ -92,11 +107,16 @@ func runWith(args []string, d commandDeps) error {
 	}
 }
 
-func runScan(args []string, d commandDeps) error {
-	if len(args) != 1 {
+func runScan(args []string) error {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
 		return fmt.Errorf("scan takes exactly one asset (CODE-ISSUER)")
 	}
-	asset, err := scan.ParseAsset(args[0])
+	asset, err := scan.ParseAsset(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -104,7 +124,7 @@ func runScan(args []string, d commandDeps) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := d.scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -112,6 +132,49 @@ func runScan(args []string, d commandDeps) error {
 	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
+}
+
+// assetListFlags registers the -asset-lists flag shared by every command that
+// scans, and returns a constructor for the URLs it names.
+//
+// No list is a default, and that is deliberate: shipping one would hard-code a
+// provider's curation as authoritative for every scan, and would add evidence
+// to every report — which changes every evidence_hash, including for assets
+// already attested. A caller opts in, and each list it names is attributed
+// separately by name and URL. See docs/asset-lists.md.
+func assetListFlags(fs *flag.FlagSet) func() []string {
+	var urls listFlag
+	fs.Var(&urls, "asset-lists",
+		"SEP-0042 Stellar Asset List URLs to consume, comma-separated or repeated; none by default")
+	return func() []string {
+		return append([]string(nil), urls...)
+	}
+}
+
+// newScanner returns a production Scanner configured to consult the given
+// SEP-0042 asset lists.
+func newScanner(lists []string) *scan.Scanner {
+	sc := scan.New()
+	sc.AssetListURLs = lists
+	return sc
+}
+
+// listFlag collects repeated -asset-lists values as well as comma-separated
+// ones, so both forms work:
+//
+//	-asset-lists=a,b -asset-lists=c
+//	-asset-lists a -asset-lists b
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			*l = append(*l, p)
+		}
+	}
+	return nil
 }
 
 // runAttestation prints the arguments of an on-chain attest() call for one
@@ -123,7 +186,7 @@ func runScan(args []string, d commandDeps) error {
 // recomputed from -preimage — before a key ever touches them.
 func runAttestation(args []string, d commandDeps) error {
 	fs := flag.NewFlagSet("attestation", flag.ContinueOnError)
-	fs.SetOutput(d.stderr)
+	assetLists := assetListFlags(fs)
 	preimage := fs.Bool("preimage", false, "include the canonical bytes evidence_hash commits to")
 	raw := fs.Bool("raw", false, "print only the attest() arguments, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -140,7 +203,7 @@ func runAttestation(args []string, d commandDeps) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := d.scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -167,7 +230,7 @@ func runAttestation(args []string, d commandDeps) error {
 
 func runHistory(args []string, d commandDeps) error {
 	fs := flag.NewFlagSet("history", flag.ContinueOnError)
-	fs.SetOutput(d.stderr)
+	assetLists := assetListFlags(fs)
 	guarantee := fs.Bool("guarantee", false, "exit non-zero when there is no history")
 	raw := fs.Bool("raw", false, "print only the history, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -185,7 +248,7 @@ func runHistory(args []string, d commandDeps) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := d.scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -258,6 +321,7 @@ var candidateTransitions = []string{
 	"blocked",
 	"unverified",
 	"not retrievable",
+	"not present",
 	"credits",
 	"claims",
 	"borrow",
@@ -274,16 +338,38 @@ type historyEntry struct {
 
 func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
 	addr := fs.String("addr", ":8080", "listen address")
+	historyPath := fs.String("history", "",
+		"path to the observation history log (JSON Lines); empty keeps history in memory only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	// The cache lives as long as the server process, which is where it earns
+	// its keep: repeated scans of the same issuer reuse an answer instead of
+	// re-reading a free service on every request.
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(log).Handler(),
+		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
+	srv := api.NewServer(log)
+	// The server is where a list configuration matters most: every scan it
+	// serves consults the same configured lists, attributed the same way, and
+	// records them in the observation history like any other evidence.
+	srv.Scanner = newScanner(assetLists())
+	if *historyPath != "" {
+		store, err := historystore.Open(*historyPath)
+		if err != nil {
+			return err
+		}
+		srv.History = store
+	}
+
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Info("assay listening", "addr", *addr)
-	return srv.ListenAndServe()
+	log.Info("assay listening", "addr", *addr, "history", *historyPath)
+	return httpSrv.ListenAndServe()
 }

@@ -144,6 +144,14 @@ to any string; a stellar.toml can list any code it likes. Matching on code alone
 would let any domain claim any asset — the exact impersonation this check
 exists to catch — so both must match.
 
+Two states are decided before any toml is fetched. **No `home_domain` at all**
+means nobody has claimed the asset: accountability is `unknown`, and the
+reasoning says so plainly — an absent claim is not a failed one. **A
+`home_domain` that disagrees with the curated directory's `domain`** is
+reported as `unverified` with both claims attributed to their source and URL,
+because a holder cannot tell a benign brand migration from an impersonation
+setup while the two sources simply contradict each other.
+
 Verification failures are reported verbatim, including the HTTP status. "We
 could not check" and "this is fine" are different answers and must never render
 the same.
@@ -154,53 +162,15 @@ StellarExpert endpoints did not, and a scan during an outage claimed reputation
 had been read when it had not. Fixed, with the history in
 [the attestation run](attestation-run.md#finding-1).
 
-The same rule applies to negatives. SEP-0001 permits a currency entry whose only
-field is `toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the
-declaration to a separate file. Such an entry carries no code or issuer, so it
-can never match inline. Assay **follows those links**, one hop only, and a match
-in a linked document is a claim exactly like an inline one: it sets verified
-accountability and records the document that made the claim as the evidence
-URL.
-
-Following links is bounded. At most `sep1.MaxLinkedDocuments` (8) links are
-followed per issuer, and the bound is reported rather than hidden when it is
-reached. A linked document's own links are not followed, so a cycle cannot make
-the scanner fetch forever. Every linked fetch goes through the same host
-policy, scheme rule (`https`), size cap (`sep1.MaxBody`) and timeout as the main
-document.
-
-The three outcomes that are not a match are kept apart, because overstating a
-negative is the same class of error as overstating a positive:
-
-- **All links read, none names the asset** — a genuine refusal. The domain
-  published a toml and its linked documents, and none claims this code and
-  issuer. This is `unverified`, with reasoning that says the domain has not
-  claimed the asset.
-- **A link could not be read** — unresolved. Whether that document claimed the
-  asset is unknown, so the reasoning keeps the hedge and never claims the domain
-  failed to name it. The evidence records how many linked documents were read
-  and how many were not.
-- **More links than the bound** — unresolved, and the report says the bound was
-  hit. The unread documents may have claimed the asset, so this is not a
-  refusal either.
-
-### Host policy
-
-`home_domain` is attacker-controlled free text that is turned into a URL the
-scanner fetches. While Assay runs as a server — which `assay serve` and the
-deployed API both do — fetching it without a check is a request-forgery
-primitive against whatever the server can reach. Assay therefore **refuses
-non-public hosts**: loopback, private (RFC 1918 / RFC 4193) and link-local
-addresses, the cloud metadata address `169.254.169.254`, and names that cannot
-be public (`localhost`, `*.local`/`*.internal`, a bare single-label hostname).
-The decision and its limits are recorded in
-[threat-model.md](threat-model.md).
-
-A refusal is a decision Assay made, not a source that failed. It is reported as
-attributed evidence the same way a fetch failure is, but the evidence is marked
-`refused` so a consumer can tell "Assay declined to fetch this host" from "the
-host did not answer" without reading the claim text. A refusal is never rendered
-as a source that failed to answer. Per-currency links obey the same policy.
+The same rule applies to negatives. SEP-0001 permits a currency entry carrying
+`toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the declaration to
+a separate file; the link need not be the entry's only field, so one entry may
+carry both a link and a code. Assay does not follow those links yet, so every
+entry that carries one and does not already declare this asset inline makes the
+answer **unconfirmed** rather than a claim that the domain failed to name it —
+overstating a negative is the same class of error as overstating a positive.
+An entry that does match inline is the claim itself and is not an unresolved
+link. Following those links is not implemented yet.
 
 **Cannot conclude:** that a verified issuer is honest. It establishes that a
 named party has published a claim, nothing more. A scammer can register a domain
@@ -216,10 +186,25 @@ Consumes StellarExpert's address directory (the data set standardized by
 SEP-0037) and malicious-domain blocklist. A `malicious`/`unsafe` directory tag
 or a blocklist hit escalates to `critical`.
 
+Any configured [SEP-0042 asset list](asset-lists.md) is consumed here too, one
+`Evidence` entry per list, attributed by the list's own name and URL. A list can
+neither escalate nor lower the level: inclusion is not endorsement — the spec
+says so itself — and absence from a list is not an observation. When the lists
+disagree, or disagree with StellarExpert, the report says so and leaves it
+unresolved rather than averaging two providers into one verdict. A list that
+could not be read is recorded as failure evidence rather than as an absence, and
+does not mark the report `undetermined`, because it is not a source the verdict
+depends on.
+
 Everything it produces is `Evidence{Source, URL, Claim, RetrievedAt}` naming
 StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
 is no code path that renders someone else's data as an Assay conclusion.
+
+`RetrievedAt` is the instant the source produced its answer. A scan may reuse a
+cached answer ([caching.md](caching.md)), and when it does this is the original
+fetch time rather than the time of the scan, so a report states a claim's true
+age instead of implying it was just checked.
 
 Assay does not maintain a scam list, a rating, or a domain blocklist. That layer
 exists, is actively curated, and is better than anything this project would
