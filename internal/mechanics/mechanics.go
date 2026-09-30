@@ -20,6 +20,56 @@ import (
 	"github.com/use-assay/assay/internal/stellarexpert"
 )
 
+// TimeFormat is the one wire format for every time value Assay emits (issue
+// #52): UTC, RFC 3339, whole-second precision (RFC 3339 "Z" form, no
+// fractional digits). Precision is stated here and enforced by CanonicalTime's
+// marshaler; the attest package formats the hashed/report stream with the same
+// layout, so `scan` and `attestation` emit identical bytes for the same
+// instant instead of RFC3339Nano in one and truncated seconds in the other.
+const TimeFormat = "2006-01-02T15:04:05Z"
+
+// CanonicalTime is a time.Time that marshals through TimeFormat: one wire
+// format, UTC, whole-second precision, for every time value Assay emits
+// (issue #52). Non-UTC input is normalised to UTC, never rejected; fractional
+// seconds are accepted on input for forward compatibility but re-emission is
+// always whole-second, so a stored document round-trips to canonical bytes.
+type CanonicalTime time.Time
+
+// NewCanonicalTime normalises any instant into the canonical representation.
+func NewCanonicalTime(t time.Time) CanonicalTime {
+	return CanonicalTime(t.UTC().Truncate(time.Second))
+}
+
+// Time returns the underlying instant.
+func (c CanonicalTime) Time() time.Time { return time.Time(c) }
+
+// IsZero reports whether the instant is the zero time, mirroring
+// time.Time.IsZero for callers that treat a missing stamp as unknown.
+func (c CanonicalTime) IsZero() bool { return c.Time().IsZero() }
+
+// String renders the canonical wire format.
+func (c CanonicalTime) String() string { return c.Time().UTC().Format(TimeFormat) }
+
+// MarshalJSON renders the canonical string form.
+func (c CanonicalTime) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + c.String() + `"`), nil
+}
+
+// UnmarshalJSON parses the quoted format MarshalJSON emits.
+func (c *CanonicalTime) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return fmt.Errorf("mechanics: time must be a quoted RFC 3339 string, got %s", s)
+	}
+	s = s[1 : len(s)-1]
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return fmt.Errorf("mechanics: invalid RFC 3339 timestamp %q: %w", s, err)
+	}
+	*c = NewCanonicalTime(t)
+	return nil
+}
+
 // Asset identifies a classic Stellar asset.
 type Asset struct {
 	Code   string `json:"code"`
@@ -295,6 +345,11 @@ type AssetListSignal struct {
 	Err string
 }
 
+// ReportSchemaVersion is the current value Report.SchemaVersion marshals as
+// (issue #44). Bump it on any breaking change to the report JSON shape; see
+// the compatibility rule on the field.
+const ReportSchemaVersion = 1
+
 // HomeDomain returns the issuer's advertised home_domain, if any.
 func (s *Subject) HomeDomain() string {
 	if s.Issuer == nil {
@@ -316,6 +371,16 @@ type Check interface {
 
 // Report is the aggregated result of running every check over one asset.
 type Report struct {
+	// SchemaVersion is the version of the report JSON shape (issue #44).
+	// Consumers read it to know which shape they are parsing — the /api/v1 in
+	// the URL is a route namespace, not a payload contract.
+	//
+	// Compatibility rule: ADDITIVE changes (a new optional field, a new enum
+	// member consumers must already tolerate) do NOT bump this value.
+	// REMOVALS, renames, type changes, and semantic changes to an existing
+	// field DO bump it. The current value is 1.
+	SchemaVersion int `json:"schema_version"`
+
 	Asset Asset `json:"asset"`
 
 	// Severity is the final level: the capability base, raised by any
@@ -453,9 +518,10 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		scannedAt = s.FetchedAt
 	}
 	rep := &Report{
+		SchemaVersion:      ReportSchemaVersion,
 		Asset:              s.Asset,
 		Accountability:     AccountabilityUnknown,
-		ScannedAt:          scannedAt,
+		ScannedAt:          CanonicalTime(scannedAt),
 		CheckSet:           e.CheckIDs(),
 		Findings:           []Finding{},
 		Evidence:           []Evidence{},

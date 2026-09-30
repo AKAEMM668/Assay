@@ -119,7 +119,7 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Claim:  "not retrievable: " + s.TomlErr,
 			// The toml never answered, so this carries the attempt time, not a
 			// retrieval time — and says so programmatically.
-			RetrievedAt: s.TomlAttemptedAt,
+			RetrievedAt: NewCanonicalTime(s.TomlAttemptedAt),
 			Attempted:   true,
 		})
 		return f, nil
@@ -154,7 +154,7 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				Claim: fmt.Sprintf(
 					"CURRENCIES lists %d entries, none matching %s inline; %d are links not followed",
 					len(s.Toml.Currencies), s.Asset, linked),
-				RetrievedAt: s.Toml.FetchedAt,
+				RetrievedAt: NewCanonicalTime(s.Toml.FetchedAt),
 			})
 			return f, nil
 		}
@@ -172,7 +172,7 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			URL:    s.Toml.URL,
 			Claim: fmt.Sprintf("CURRENCIES lists %d entries, none matching %s",
 				len(s.Toml.Currencies), s.Asset),
-			RetrievedAt: s.Toml.FetchedAt,
+			RetrievedAt: NewCanonicalTime(s.Toml.FetchedAt),
 		})
 		return f, nil
 	}
@@ -188,7 +188,7 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		Source:      "stellar.toml",
 		URL:         s.Toml.URL,
 		Claim:       "CURRENCIES claims " + s.Asset.String(),
-		RetrievedAt: s.Toml.FetchedAt,
+		RetrievedAt: NewCanonicalTime(s.Toml.FetchedAt),
 	})
 	return f, nil
 }

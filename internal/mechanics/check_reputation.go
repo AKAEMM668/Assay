@@ -59,7 +59,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Claim:  "not retrievable: " + s.DirectoryErr,
 			// The source never answered, so this is the attempt time — marked
 			// as such, because an attempt is not an answer.
-			RetrievedAt: s.DirectoryAttemptedAt,
+			RetrievedAt: NewCanonicalTime(s.DirectoryAttemptedAt),
 			Attempted:   true,
 		})
 	}
@@ -70,7 +70,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Source:      "stellar.expert/blocked-domains",
 			URL:         s.BlockedURL,
 			Claim:       "not retrievable: " + s.BlockedErr,
-			RetrievedAt: s.BlockedAttemptedAt,
+			RetrievedAt: NewCanonicalTime(s.BlockedAttemptedAt),
 			Attempted:   true,
 		})
 	}
@@ -82,7 +82,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			URL:    s.DirectoryURL,
 			Claim: fmt.Sprintf("listed as %q (domain %q, tags: %s)",
 				s.Directory.Name, s.Directory.Domain, tags),
-			RetrievedAt: s.DirectoryFetchedAt,
+			RetrievedAt: NewCanonicalTime(s.DirectoryFetchedAt),
 		})
 		for _, tag := range []string{"malicious", "unsafe"} {
 			if s.Directory.HasTag(tag) {
@@ -97,7 +97,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Source:      "stellar.expert/blocked-domains",
 			URL:         s.BlockedURL,
 			Claim:       fmt.Sprintf("domain %q blocked=%t", s.Blocked.Domain, s.Blocked.Blocked),
-			RetrievedAt: s.BlockedFetchedAt,
+			RetrievedAt: NewCanonicalTime(s.BlockedFetchedAt),
 		})
 		if s.Blocked.Blocked {
 			flagged = append(flagged, fmt.Sprintf(

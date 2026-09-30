@@ -321,7 +321,52 @@ procedure: deriving the address for the network, reading the attestation, the
 `undetermined` scan that makes verification impossible rather than failed, and
 the third cause of a mismatch — the verifier's own environment, which is
 [#24](https://github.com/use-assay/Assay/issues/24) and is not fixed yet.
+### Or let the CLI do all three steps
 
+`assay verify` (issue #39) performs the re-scan, the hash recomputation and the
+on-chain read in one command, and exits non-zero on anything other than
+agreement:
+
+```sh
+$ ./assay verify USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
+AGREE: USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
+on-chain attestation matches the live scan
+$ echo $?
+0
+```
+
+The outcomes are deliberately distinct — four different messages and four
+different exit codes — because "the attestation disagrees" and "there is no
+attestation" demand different reactions from a gate operator:
+
+| Outcome | Meaning | Exit code |
+| --- | --- | --- |
+| `agree` | scan, recomputed hash and chain all match | 0 |
+| `stale` | they match, but the attestation is older than `-max-age` seconds | 2 |
+| `mismatch` | one or more of `severity`, `flags`, `evidence_hash` differ; the differing fields are named | 1 |
+| `absent` | no attestation on chain for this asset | 3 |
+| `unverifiable` | the scan is undetermined (or otherwise nothing attestable), so no verdict is possible | 4 |
+
+An undetermined scan **never** reports agreement: the command refuses to
+compare a partial answer against the chain, reporting `unverifiable` instead.
+Staleness is only judged when you pass `-max-age <seconds>`; without it a
+matching attestation agrees regardless of age, because freshness policy
+belongs to the caller (the same policy `is_safe`'s `max_age_secs` encodes
+on-chain).
+
+```sh
+# fail the check when the attestation is more than an hour old
+./assay verify -max-age 3600 USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
+
+# machine-readable verdict for scripts
+./assay verify -json AQUA-GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA
+```
+
+The command reads the registry through the same simulated `get_safety` call
+`make read` uses, so verifying costs nothing and needs no signature. The
+registry id and network default to the live testnet deployment recorded in
+[deployment.md](deployment.md); override with `ASSAY_CONTRACT_ID` and
+`ASSAY_NETWORK` to verify against another deployment.
 ## Before you rely on this
 
 - It is on **testnet**, not pubnet.
