@@ -76,6 +76,40 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  # evidence_hash is the project's reproducibility claim: anyone re-scanning an
+  # attested asset must derive byte-identical preimage bytes, whatever Go they
+  # run. CI's main job tests one pinned version (go.mod); contributors run
+  # others. Map iteration order, strconv formatting and string sorting are
+  # where a toolchain difference would surface, so the attest package — the
+  # golden byte comparison and its vectors — runs on one older and one newer
+  # Go version than the pin. A version that changes the bytes fails here
+  # instead of shipping as an unexplained hash mismatch.
+  #
+  # Deliberately narrow, so it does not meaningfully slow CI: this package
+  # only, no race detector, no coverage, no matrix for the rest of the module.
+  # Explicit versions rather than `stable`: setup-go resolves `stable` to a
+  # moving target, which is the same trap the main job's go-version-file pin
+  # avoids for golangci-lint.
+  attest-reproducibility:
+    name: attest on Go ${{ matrix.go-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+    matrix:
+      go-version: ["1.22.x", "1.27.x"]
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+
+      # Pure functions over committed fixtures under internal/attest/testdata:
+      # no network access needed.
+      - name: go test ./internal/attest/
+        run: go test ./internal/attest/
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest
@@ -92,6 +126,14 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: lint shell scripts
+        run: find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0 | xargs -0 shellcheck -S warning
 
   contract:
     name: Soroban contract
@@ -114,6 +156,13 @@ jobs:
       - name: cargo test
         run: cargo test
 
+      - name: check contract test snapshots
+        run: |
+          if ! git diff --exit-code -- contracts/example-gate/test_snapshots contracts/safety-registry/test_snapshots; then
+            echo "::error::Contract tests modified committed snapshots. Review the changed files and commit intentional snapshot updates."
+            exit 1
+          fi
+
   # Merge gate: catches PRs that touch maintainer-owned safety-critical paths
   # without manual review. A PR touching only docs or tests merges cleanly;
   # one touching the severity model, the evidence_hash encoding, or the
@@ -131,6 +180,9 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
+
+      - name: verify CODEOWNERS paths
+        run: ./scripts/check-codeowners.sh
 
       - name: check maintainer-owned paths
         run: |
