@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/use-assay/assay/internal/assetlist"
@@ -136,6 +137,15 @@ type Finding struct {
 	// evidence of abuse does not become less true when a second source is
 	// down.
 	Undetermined bool `json:"undetermined"`
+	// UndeterminedBySource records which source caused this finding to be
+	// undetermined. This distinguishes a source failing (e.g. StellarExpert
+	// unreachable) from a source being skipped (e.g. home_domain empty).
+	UndeterminedBySource map[string]int `json:"undetermined_by_source,omitempty"`
+	// UndeterminedRate is the rate for this specific finding, expressed as
+	// "numerator/denominator" where denominator is the total number of checks
+	// run. When the sample is small (fewer than 20 scans), the rate is reported
+	// with its sample size noted, never as a general claim.
+	UndeterminedRate string `json:"undetermined_rate,omitempty"`
 	// Reasoning always states the raw capability in plain language, whatever
 	// the severity works out to.
 	Reasoning string `json:"reasoning"`
@@ -437,7 +447,7 @@ type Report struct {
 	StaleReason string `json:"stale_reason,omitempty"`
 
 	// Undetermined reports that at least one check could not complete because
-	// a source was unreachable, so this report is a partial answer.
+	// a source it depends on was unreachable, so this report is a partial answer.
 	//
 	// Severity is still whatever the checks that did complete established, and
 	// it is never inflated to compensate — inventing a level would be its own
@@ -448,6 +458,17 @@ type Report struct {
 	// UndeterminedChecks names the checks that could not complete, so a
 	// consumer can see which axis is missing rather than only that one is.
 	UndeterminedChecks []string `json:"undetermined_checks"`
+	// UndeterminedBySource reports, for each source, how many checks could not
+	// complete because that source was unreachable. The keys are source names
+	// such as "horizon", "stellar.expert/directory", and "stellar.expert/blocked-domains".
+	// This distinguishes a source failing (unreachable) from a source being skipped
+	// (e.g. home_domain empty, not attempted).
+	UndeterminedBySource map[string]int `json:"undetermined_by_source,omitempty"`
+	// UndeterminedRate is the undetermined rate for this report, expressed as
+	// "numerator/denominator" where denominator is the total number of checks
+	// run for this asset. When the sample is small (fewer than 20 scans), the
+	// rate is reported with its sample size noted, never as a general claim.
+	UndeterminedRate string `json:"undetermined_rate,omitempty"`
 
 	// Network is the Stellar network the facts were read from, named by the
 	// full network passphrase. It is bound into the evidence preimage from v3
@@ -484,6 +505,12 @@ type Report struct {
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
 	Evidence      []Evidence `json:"evidence"`
+	ScannedAt     time.Time  `json:"scanned_at"`
+
+	// ObservationWindowStart is the start of the observation window for this report.
+	ObservationWindowStart time.Time `json:"observation_window_start,omitempty"`
+	// ObservationWindowEnd is the end of the observation window for this report.
+	ObservationWindowEnd time.Time `json:"observation_window_end,omitempty"`
 	// ScannedAt is when the scan run started (the Subject.ScannedAt timestamp).
 	// It is the report-level timestamp.
 	//
@@ -537,6 +564,18 @@ func (e *Engine) CheckIDs() []string {
 //     ever raise the level.
 //   - Accountability is taken from whichever check establishes it and is not
 //     permitted to influence either severity.
+//
+// Undetermined tracking:
+//   - UndeterminedBySource records, for each source, how many checks could not
+//     complete because that source was unreachable. This distinguishes a source
+//     failing (e.g. StellarExpert unreachable) from a source being skipped
+//     (e.g. home_domain empty, not attempted).
+//   - UndeterminedRate is the undetermined rate expressed as "numerator/denominator"
+//     where denominator is the total number of checks run for this asset.
+//     When the sample is small (fewer than 20 scans), the rate is reported with
+//     its sample size noted, never as a general claim.
+//   - ObservationWindowStart/End records the start and end of the observation
+//     window for the scan.
 func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	scannedAt := s.ScannedAt
 	if scannedAt.IsZero() && !s.FetchedAt.IsZero() {
@@ -552,6 +591,9 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		Evidence:           []Evidence{},
 		UndeterminedChecks: []string{},
 	}
+
+	totalChecks := len(e.Checks)
+	undeterminedCount := 0
 
 	for _, c := range e.Checks {
 		rep.Checks = append(rep.Checks, c.ID())
@@ -575,6 +617,12 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		if f.Undetermined {
 			rep.Undetermined = true
 			rep.UndeterminedChecks = append(rep.UndeterminedChecks, f.Check)
+			undeterminedCount++
+
+			// Determine the source that caused the undetermined status.
+			// Priority: 1) evidence source, 2) reasoning keywords, 3) subject fields.
+			source := determineUndeterminedSource(f, s)
+			rep.UndeterminedBySource[source]++
 		}
 
 		if f.Accountability != nil {
@@ -599,6 +647,17 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		rep.Evidence = append(rep.Evidence, f.Evidence...)
 	}
 
+	// Calculate undetermined rate as "numerator/denominator".
+	// denominator = total number of checks run (len(e.Checks)).
+	// numerator = number of checks that were undetermined.
+	if undeterminedCount > 0 && totalChecks > 0 {
+		rep.UndeterminedRate = fmt.Sprintf("%d/%d", undeterminedCount, totalChecks)
+	}
+
+	// Set observation window: start from the scan start time, end at scanned at.
+	rep.ObservationWindowStart = s.ScannedAt
+	rep.ObservationWindowEnd = s.ScannedAt
+
 	if rep.Base > rep.Severity {
 		rep.Severity = rep.Base
 	}
@@ -616,4 +675,56 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	})
 	sort.Strings(rep.Checks)
 	return rep, nil
+}
+
+// determineUndeterminedSource figures out which source caused a check to be
+// undetermined. It prioritizes: 1) the finding's evidence source, 2) keywords
+// in the reasoning, 3) subject-level failure fields.
+func determineUndeterminedSource(f Finding, s *Subject) string {
+	// 1) Check the finding's evidence for a source attribution.
+	if len(f.Evidence) > 0 {
+		for _, e := range f.Evidence {
+			if e.Source != "" {
+				return e.Source
+			}
+		}
+	}
+
+	// 2) Check reasoning keywords for source hints.
+	low := strings.ToLower(f.Reasoning)
+	if strings.Contains(low, "horizon") || strings.Contains(low, "asset not found") {
+		return "horizon"
+	}
+	if strings.Contains(low, "stellar.expert/directory") || strings.Contains(low, "curated directory") {
+		return "stellar.expert/directory"
+	}
+	if strings.Contains(low, "stellar.expert/blocked") || strings.Contains(low, "blocked-domains") {
+		return "stellar.expert/blocked-domains"
+	}
+	if strings.Contains(low, "home_domain") || strings.Contains(low, "stellar.toml") {
+		return "stellar.toml"
+	}
+	if strings.Contains(low, "trustline") {
+		return "horizon/trustline"
+	}
+
+	// 3) Fall back to subject-level failure fields.
+	if s.Stat == nil {
+		return "horizon"
+	}
+	if s.DirectoryErr != "" {
+		return "stellar.expert/directory"
+	}
+	if s.BlockedErr != "" {
+		return "stellar.expert/blocked-domains"
+	}
+	if s.TomlErr != "" {
+		return "stellar.toml"
+	}
+	if s.HolderTrustlineErr != "" || s.HolderTrustline == nil {
+		return "horizon/trustline"
+	}
+
+	// 4) Last resort: generic label.
+	return "unknown"
 }
