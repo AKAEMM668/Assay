@@ -11,10 +11,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/use-assay/assay/internal/assetlist"
 	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/sep1"
@@ -68,60 +70,39 @@ type Scanner struct {
 	Toml    *sep1.Fetcher
 	Expert  *stellarexpert.Client
 	Engine  *mechanics.Engine
-	// Network is the Stellar network the scan claims to read, named by the
-	// full network passphrase. It is stamped onto every Subject and bound
-	// into the evidence preimage from v3 on.
+	// Lists fetches the configured SEP-0042 Stellar Asset Lists.
+	Lists *assetlist.Client
+
+	// AssetListURLs are the curated lists consulted for every scan, in order.
 	//
-	// Subject assembly cross-checks the claim against the Horizon base URL
-	// and fails closed when they contradict or when neither can name the
-	// network: the same CODE-ISSUER can exist on two networks with different
-	// flags (#41), so a wrong or guessed network name is not a cosmetic
-	// mistake, it is a false attestation.
-	Network horizon.Network
+	// It is empty by default, deliberately: no list is shipped as
+	// authoritative, and shipping a default one would also add evidence to
+	// every report — which changes every evidence_hash, including for assets
+	// already attested. Configure it explicitly (or with -asset-lists) and each
+	// list is attributed separately by name and URL.
+	AssetListURLs []string
 }
 
-// New returns a Scanner wired to the public production sources. The default
-// Horizon endpoint is SDF pubnet, so the scanner declares pubnet; a scan
-// pointed elsewhere must set Network explicitly or Subject fails rather than
-// guessing.
+// New returns a Scanner wired to the public production sources.
+//
+// Two environment variables override the upstream endpoints, to let the
+// reproducibility job (and anyone debugging it) point a source at an
+// unreachable address and exercise the undetermined path without editing
+// code:
+//
+//	ASSAY_HORIZON_URL        overrides Horizon's base URL
+//	ASSAY_STELLAREXPERT_URL  overrides StellarExpert's API root
+//
+// Empty means the public default. Anything else is used verbatim, so
+// pointing one at http://127.0.0.1:1 makes that source fail and the scan
+// report undetermined (or fail, for Horizon) rather than succeed.
 func New() *Scanner {
 	return &Scanner{
-		Horizon: horizon.New(""),
+		Horizon: horizon.New(os.Getenv("ASSAY_HORIZON_URL")),
 		Toml:    sep1.NewFetcher(),
-		Expert:  stellarexpert.New(""),
+		Expert:  stellarexpert.New(os.Getenv("ASSAY_STELLAREXPERT_URL")),
 		Engine:  mechanics.NewEngine(),
-		Network: horizon.PublicNet,
-	}
-}
-
-// resolveNetwork decides which network a scan is on.
-//
-// Three inputs exist — the declared Network, the Horizon base URL, and
-// nothing — and every combination that cannot name exactly one network is an
-// error rather than a default:
-//
-//   - a known Horizon host with a contradicting declaration is refused, not
-//     silently re-labelled (a misconfigured testnet scan must not attest as
-//     pubnet);
-//   - a custom base URL with no declaration is refused — that host's network
-//     cannot be determined, and guessing is the bug #41 is about;
-//   - an explicit declaration on an unknown host is honoured: private or
-//     stub Horizons are legitimate, and the caller is the authority on which
-//     ledger it points at.
-func (s *Scanner) resolveNetwork() (horizon.Network, error) {
-	derived, deriveErr := s.Horizon.Network()
-	switch {
-	case deriveErr == nil:
-		if s.Network != "" && s.Network != derived {
-			return "", fmt.Errorf("scan: network declared %q but Horizon at %s serves %q",
-				s.Network, s.Horizon.BaseURL, derived)
-		}
-		return derived, nil
-	case s.Network != "":
-		return s.Network, nil
-	default:
-		return "", fmt.Errorf("scan: %w; set Scanner.Network to the passphrase of the ledger Horizon at %s serves",
-			deriveErr, s.Horizon.BaseURL)
+		Lists:   assetlist.New(),
 	}
 }
 
@@ -192,6 +173,48 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	} else {
 		sub.Directory = entry
 		sub.DirectoryFetchedAt = time.Now().UTC()
+	}
+
+	// SEP-0042 asset lists, one signal each, in configuration order. Each is
+	// best-effort for the same reason every other consumed signal is: a list
+	// that is down must not turn a dangerous asset into an error page. The
+	// failure is recorded per list, so one bad URL cannot be read as another
+	// provider's silence, and an unreadable list is recorded as a failure
+	// rather than as an absence.
+	if len(s.AssetListURLs) > 0 {
+		lists := s.Lists
+		if lists == nil {
+			lists = assetlist.New()
+		}
+		for _, listURL := range s.AssetListURLs {
+			attempted := time.Now().UTC()
+			list, err := lists.Fetch(ctx, listURL)
+			if err != nil {
+				sub.AssetLists = append(sub.AssetLists, mechanics.AssetListSignal{
+					URL:         listURL,
+					AttemptedAt: attempted,
+					Err:         err.Error(),
+				})
+				continue
+			}
+			sig := mechanics.AssetListSignal{
+				Name:        list.Name,
+				Provider:    list.Provider,
+				URL:         list.URL,
+				Version:     list.Version,
+				Network:     list.Network,
+				FetchedAt:   list.FetchedAt,
+				AttemptedAt: attempted,
+			}
+			// Match on the classic pair, and on the asset's contract address as
+			// a second key: a list may publish either, and Horizon reports the
+			// SAC on the asset record we already hold.
+			if e, ok := list.Lookup(a.Code, a.Issuer, stat.ContractID); ok {
+				sig.Entry = &e
+				sig.Listed = true
+			}
+			sub.AssetLists = append(sub.AssetLists, sig)
+		}
 	}
 
 	return sub, nil

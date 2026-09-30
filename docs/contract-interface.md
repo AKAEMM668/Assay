@@ -43,8 +43,72 @@ pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool;
 pub fn is_safe_masked(env: Env, asset: Address, forbidden_mask: u32, max_age_secs: u64) -> bool;
 pub fn attest(env: Env, asset: Address, severity: u32, flags: u32, evidence_hash: BytesN<32>) -> Result<(), Error>;
+pub fn revoke(env: Env, asset: Address) -> Result<(), Error>;
 pub fn init(env: Env, admin: Address) -> Result<(), Error>;
 ```
+
+| Error | Code | Returned by |
+| --- | --- | --- |
+| `AlreadyInitialized` | 1 | `init` on an initialized contract |
+| `NotInitialized` | 2 | `attest`, `revoke` before `init` |
+| `InvalidSeverity` | 3 | `attest` with severity above 4 |
+| `InconsistentAttestation` | 4 | `attest` with the clawback bit below `SEVERITY_HIGH` |
+| `NotAttested` | 5 | `revoke` for an asset with no attestation |
+
+### `revoke`: withdrawing an attestation
+
+`revoke(asset)` removes the stored attestation, which restores the
+never-attested state exactly: `get_safety` returns `None`, and `is_safe` and
+`is_safe_masked` return `false` whatever arguments they get. It requires the
+admin's authorization, as `attest` does.
+
+It exists because overwriting is not a retraction. If an attestation turns out
+to be wrong (a scanner bug, a compromised key, evidence that does not support
+it), writing a higher severity over it makes a *new* claim the scanner never
+reached. Revoking says only that the old claim no longer stands, and it leaves
+every gate failing closed until a correct attestation is written.
+
+- **Admin, existing attestation:** removed; a `revoke` event is published.
+- **Non-admin caller:** rejected by `require_auth`, as `attest` is. Nothing
+  changes.
+- **No attestation for the asset:** returns `NotAttested`, changes nothing, and
+  publishes nothing. This is an error rather than a no-op on purpose: a revoke
+  sent to the wrong SAC address (easy to do, since addresses are
+  network-derived) must fail loudly rather than report success while the
+  attestation it was meant to withdraw is still there. A retried revoke also
+  gets `NotAttested`, which an operator can read as "already gone".
+- **Re-attesting afterwards** works normally. The new attestation carries its
+  own `attested_at`.
+
+#### Revoked and never-attested look the same on-chain, deliberately
+
+**A consumer calling `get_safety` cannot tell a revoked asset from one that was
+never attested.** Both return `None`. The contract keeps no tombstone.
+
+That is a choice, not something left out:
+
+- Both states mean the same thing to a gate: no claim stands, so fail closed.
+  Every correctly written gate already handles `None`, so revocation needs no
+  consumer changes.
+- A tombstone would be a new stored type and a new read path that every
+  integrator would have to understand. It would also be one more persistent
+  entry with its own TTL (see [deployment.md](deployment.md#entry-lifetime)),
+  and it would archive like any other entry.
+- The one party that needs the difference is an off-chain observer, for
+  example an indexer that saw the `attest` event and would otherwise go on
+  believing it. That party gets the `revoke` event below.
+
+If a future consumer needs to prove on-chain that an asset *was* revoked,
+that is a new feature with its own ABI. It is not implied by this one.
+
+#### Migration
+
+The deployed registry (`CBK4FBIH…`) has no upgrade entrypoint, so `revoke` and
+the TTL handling cannot be added to it in place. Using them needs a **new
+deployment**: a new contract ID, `init`, re-attesting the assets from live
+scans, and redeploying the example gate against the new address. The steps are
+in [deployment.md](deployment.md#migrating-to-a-registry-with-revoke).
+Until that is done, the live testnet registry still has no revoke path.
 
 ### Named policy masks for `is_safe_masked`
 
@@ -77,9 +141,16 @@ happen.
 | Topic 0 | Topic 1 | Data |
 | --- | --- | --- |
 | `symbol_short!("attest")` | asset `Address` | `Map<Symbol, Val>` with keys `severity: u32`, `flags: u32`, `attested_at: u64` |
+| `symbol_short!("revoke")` | asset `Address` | `Map<Symbol, Val>` with key `revoked_at: u64` |
 
-The event is defined with the `#[contractevent]` macro on the `Attested` struct
-in the contract (see `assay-contracts/contracts/safety-registry/src/lib.rs`)
+A successful `revoke` publishes the second row. A failed revoke (`NotAttested`,
+unauthorized) publishes nothing. The `revoke` event uses the same topic layout
+as `attest`, so an indexer subscribed by asset sees both the write and its
+withdrawal.
+
+The events are defined with the `#[contractevent]` macro on the `Attested` and
+`Revoked` structs
+in the contract (see `assay-contracts/contracts/safety-registry/src/lib.rs`),
 so the schema is discoverable from the contract spec rather than only from
 this document.
 
@@ -124,7 +195,10 @@ re-checked 2026-09-17): Circle's USDC has a canonical
 ### `Option`, so unknown is not safe
 
 `get_safety` returns `Option<Safety>`. A never-attested asset returns `None`,
-which stays distinguishable from an attestation of `SEVERITY_CLEAR`.
+which stays distinguishable from an attestation of `SEVERITY_CLEAR`. A revoked
+asset also returns `None` (see [`revoke`](#revoke-withdrawing-an-attestation)).
+An **archived** attestation does not: it is restored on access and read with
+its original `attested_at` (see [deployment.md](deployment.md#entry-lifetime)).
 
 Collapsing those two would make every asset nobody has scanned read as safe —
 the single worst failure this contract could have, and the default a
@@ -137,7 +211,37 @@ and is at or below `max_severity`. Every other path returns `false`: never
 attested, stale, too severe, or internally inconsistent.
 
 The safe answer is the default, so a caller who gets the arguments wrong blocks
-rather than admits.### Staleness is the caller's policy
+rather than admits.
+
+### A gate reads both severity and the bitset
+
+A gate that copies this example has to check **both** axes. They are not
+redundant, and the reader who takes one for the other is looking at the bug
+that shipped in the example gate.
+
+Severity is a total order and answers *how bad*; the bitset answers *which
+power*. Reputation escalation raises `severity` and sets `blocklisted` and must
+never set a capability bit — capability bits describe what the issuer *can do*,
+and a scam listing is not a capability. So a mask over capability bits cannot
+see escalation, by construction, and a severity ceiling cannot tell a freeze
+from a confiscation.
+
+`DOGE-GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P` (the DOGE
+fixture in the eval corpus) is the concrete counter-example. It is attested at
+severity `4` (`SEVERITY_CRITICAL`) with flags `48`
+(`domain_unverified | blocklisted`) and **no capability bits at all**, because
+its issuer genuinely cannot freeze or confiscate. A gate masking only on
+`MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED` (`6`) computes `48 & 6 == 0` and
+admits a known scam. Only the severity ceiling refuses it.
+
+The numbers are spelled out because the failure is easy to describe and easy to
+miss: `48 & 6 == 0` is exactly zero, and a gate reading a truthful bitset is
+satisfied by it. [integrating.md](integrating.md) works the same case through
+both checks, and the example gate carries the note next to `MAX_SEVERITY`. The
+history of the fix is
+[#26](https://github.com/use-assay/Assay/issues/26).
+
+### Staleness is the caller's policy
 
 `attested_at` is exposed and `max_age_secs` is a parameter rather than a
 contract constant. Assay does not silently serve stale safety, and it does not
@@ -289,12 +393,19 @@ hashed field is a false attestation waiting to be written.
 
 ## Not done yet
 
-- **Single admin.** One key can write any attestation. A production deployment
-  wants multisig or a threshold of independent attesters.
+- **Single admin.** One key can write or revoke any attestation. A production
+  deployment wants multisig or a threshold of independent attesters. The
+  options are compared, with a recommendation, in
+  [multi-attestor.md](multi-attestor.md).
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
-  issuer's flags change. Freshness is entirely the caller's problem, via
+  issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
-- **No TTL extension.** Soroban persistent entries expire if their TTL is not
-  bumped, and nothing bumps these.
+- **TTL is extended on write only.** `init`, `attest` and `revoke` extend the
+  contract instance and code to the network maximum, and `attest` extends the
+  attestation entry too. Reads extend nothing. An attestation nobody re-attests
+  is archived after roughly 180 days on current testnet parameters. It is then
+  restored on the next access at the reader's expense, not lost. See
+  [deployment.md](deployment.md#entry-lifetime). The live testnet deployment
+  predates this change, and all its entries are archived today.
 - **Testnet only.** No pubnet deployment exists, and the points above are why
   one would be premature.
