@@ -560,6 +560,27 @@ make read   ASSET=AQUA-GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA
 `assay attestation`, and submits them. There is no path through it that lets a
 hand-written severity reach the contract.
 
+## Admin Transfer and Rotation
+
+Admin authority can be rotated using a two-step process (`transfer_admin` followed by `accept_admin`).
+Two-step transfer prevents accidental transfer to an unowned address or typo:
+
+1. **Initiate Transfer** (Current Admin):
+   ```sh
+   stellar contract invoke --id <CONTRACT_ID> --source-account <CURRENT_ADMIN_KEY> \
+     --network testnet -- transfer_admin --new_admin <NEW_ADMIN_ADDRESS>
+   ```
+2. **Accept Transfer** (New Admin):
+   ```sh
+   stellar contract invoke --id <CONTRACT_ID> --source-account <NEW_ADMIN_KEY> \
+     --network testnet -- accept_admin
+   ```
+
+After `accept_admin` succeeds, `new_admin` becomes the sole authorized attester and the old admin key loses all write permissions.
+
+> [!NOTE]
+> Redeploying contract code: Adding `transfer_admin` and `accept_admin` requires redeploying the registry contract on testnet because Soroban contract WASM is immutable without an explicit upgrade entrypoint. Redeploying requires running `init(admin)` on the newly deployed instance and re-submitting attestations for the corpus assets.
+
 ## What this deployment is not
 
 - **Not mainnet, and not a candidate for it.** The list below is why.

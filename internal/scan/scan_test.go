@@ -147,19 +147,17 @@ func TestSubjectRecordsPerSourceFetchTimes(t *testing.T) {
 		t.Fatalf("Subject: %v", err)
 	}
 
-	// Order of operations in Subject: horizon assets, horizon account, toml,
-	// blocked-domains, directory. Each fetch sleeps a different amount, so the
-	// completion times must be strictly increasing in that order — a shared
-	// start-of-scan timestamp cannot satisfy this.
+	// Horizon fetches run sequentially, followed by concurrent post-account fetches.
+	// Delays: dir (10ms) < blocked (20ms) < toml (30ms).
 	seq := []struct {
 		name string
 		at   time.Time
 	}{
 		{"StatFetchedAt (horizon assets)", sub.StatFetchedAt},
 		{"IssuerFetchedAt (horizon account)", sub.IssuerFetchedAt},
-		{"Toml.Doc.FetchedAt (stellar.toml)", sub.Toml.FetchedAt},
-		{"BlockedFetchedAt (blocklist)", sub.BlockedFetchedAt},
 		{"DirectoryFetchedAt (directory)", sub.DirectoryFetchedAt},
+		{"BlockedFetchedAt (blocklist)", sub.BlockedFetchedAt},
+		{"Toml.Doc.FetchedAt (stellar.toml)", sub.Toml.FetchedAt},
 	}
 	for i := 1; i < len(seq); i++ {
 		if !seq[i].at.After(seq[i-1].at) {
@@ -215,6 +213,71 @@ func TestSubjectRecordsPerSourceFetchTimes(t *testing.T) {
 			t.Errorf("%s evidence RetrievedAt = %s, want %s (that source's completion time)",
 				ev.Source, ev.RetrievedAt.Time().Format(time.RFC3339Nano), wantAt.Format(time.RFC3339Nano))
 		}
+	}
+}
+
+// TestTimeout ensures each source gets its own sub-budget. A slow source does not
+// cause a different source to be reported unavailable, and the timeout is attributed
+// strictly to the slow source.
+func TestTimeout(t *testing.T) {
+	fs := newFakeSources(t)
+	// Slow toml server delays 200ms
+	fs.toml.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte("[[CURRENCIES]]\ncode=\"USDC\"\nissuer=\"" + scanIssuer + "\"\n"))
+	})
+
+	sc := scan.New()
+	sc.FetchTimeout = 50 * time.Millisecond
+	sc.Horizon.BaseURL = fs.horizon.URL
+	sc.Expert.BaseURL = fs.expert.URL
+	sc.Toml.HTTP.Transport = &singleHostTransport{host: strings.TrimPrefix(fs.toml.URL, "http://")}
+
+	sub, err := sc.Subject(context.Background(), mustParse(t, "USDC-"+scanIssuer))
+	if err != nil {
+		t.Fatalf("Subject failed: %v", err)
+	}
+
+	// Slow toml timed out and recorded an error
+	if sub.TomlErr == "" {
+		t.Error("expected TomlErr to be set for slow source")
+	}
+	if !strings.Contains(sub.TomlErr, "context deadline exceeded") && !strings.Contains(sub.TomlErr, "deadline") {
+		t.Errorf("TomlErr = %q, want context deadline exceeded", sub.TomlErr)
+	}
+
+	// Blocked and Directory finished normally and were not starved
+	if sub.BlockedErr != "" || sub.Blocked == nil {
+		t.Errorf("Blocked source affected by toml timeout: err=%q, val=%+v", sub.BlockedErr, sub.Blocked)
+	}
+	if sub.DirectoryErr != "" {
+		t.Errorf("Directory source affected by toml timeout: err=%q", sub.DirectoryErr)
+	}
+}
+
+// TestConcurrentPostAccountFetches verifies that concurrent post-account fetches
+// produce complete, correctly populated Subject data.
+func TestConcurrentPostAccountFetches(t *testing.T) {
+	fs := newFakeSources(t)
+
+	sc := scan.New()
+	sc.Horizon.BaseURL = fs.horizon.URL
+	sc.Expert.BaseURL = fs.expert.URL
+	sc.Toml.HTTP.Transport = &singleHostTransport{host: strings.TrimPrefix(fs.toml.URL, "http://")}
+
+	sub, err := sc.Subject(context.Background(), mustParse(t, "USDC-"+scanIssuer))
+	if err != nil {
+		t.Fatalf("Subject: %v", err)
+	}
+
+	if sub.Toml == nil || sub.TomlErr != "" {
+		t.Errorf("Toml = %+v, TomlErr = %q", sub.Toml, sub.TomlErr)
+	}
+	if sub.Blocked == nil || sub.BlockedErr != "" {
+		t.Errorf("Blocked = %+v, BlockedErr = %q", sub.Blocked, sub.BlockedErr)
+	}
+	if sub.DirectoryErr != "" {
+		t.Errorf("DirectoryErr = %q", sub.DirectoryErr)
 	}
 }
 

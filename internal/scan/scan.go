@@ -14,6 +14,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/use-assay/assay/internal/assetlist"
@@ -22,6 +23,11 @@ import (
 	"github.com/use-assay/assay/internal/sep1"
 	"github.com/use-assay/assay/internal/stellarexpert"
 )
+
+// DefaultFetchTimeout is the maximum duration allocated to any single source fetch.
+// Five total fetches (two sequential ledger fetches and three concurrent post-account fetches)
+// at 6s each sum to 30s, matching the outer context budget in main.go and api.go.
+const DefaultFetchTimeout = 6 * time.Second
 
 // issuerRE matches a Stellar ed25519 public key.
 var issuerRE = regexp.MustCompile(`^G[A-Z2-7]{55}$`)
@@ -132,6 +138,13 @@ func expertOptions(opts Options) stellarexpert.Options {
 	return o
 }
 
+func (s *Scanner) fetchTimeout() time.Duration {
+	if s.FetchTimeout > 0 {
+		return s.FetchTimeout
+	}
+	return DefaultFetchTimeout
+}
+
 // Subject fetches everything the checks need for one asset.
 //
 // Only the ledger lookups are fatal: without issuer flags there is no
@@ -146,7 +159,9 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	}
 	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC(), Network: network}
 
-	stat, err := s.Horizon.Asset(ctx, a.Code, a.Issuer)
+	statCtx, cancelStat := context.WithTimeout(ctx, timeout)
+	stat, err := s.Horizon.Asset(statCtx, a.Code, a.Issuer)
+	cancelStat()
 	if err != nil {
 		return nil, err
 	}
@@ -157,17 +172,83 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	// start.
 	sub.StatFetchedAt = time.Now().UTC()
 
-	issuer, err := s.Horizon.Account(ctx, a.Issuer)
+	acctCtx, cancelAcct := context.WithTimeout(ctx, timeout)
+	issuer, err := s.Horizon.Account(acctCtx, a.Issuer)
+	cancelAcct()
 	if err != nil {
 		return nil, err
 	}
 	sub.Issuer = issuer
 	sub.IssuerFetchedAt = time.Now().UTC()
 
+	var (
+		wg sync.WaitGroup
+
+		tomlDoc         *sep1.Doc
+		tomlErr         string
+		tomlAttemptedAt time.Time
+		tomlURL         string
+
+		blockedVal       *stellarexpert.BlockedDomain
+		blockedErr       string
+		blockedFetchedAt time.Time
+		blockedAttAt     time.Time
+		blockedURL       string
+
+		dirVal       *stellarexpert.DirectoryEntry
+		dirErr       string
+		dirFetchedAt time.Time
+		dirAttAt     time.Time
+		dirURL       string
+	)
+
 	if domain := issuer.HomeDomain; domain != "" {
-		sub.TomlURL = sep1.URLFor(domain)
+		tomlURL = sep1.URLFor(domain)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			tomlCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			attempted := time.Now().UTC()
+			doc, err := s.Toml.Fetch(tomlCtx, domain)
+			if err != nil {
+				tomlErr = err.Error()
+				// A failed fetch has no completion time, so the attempt time is
+				// what failure evidence carries — explicitly labelled as an attempt
+				// by Evidence.Attempted.
+				tomlAttemptedAt = attempted
+			} else {
+				tomlDoc = doc
+			}
+		}()
+
+		blockedURL = s.Expert.BlockedDomainURL(domain)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			blockedCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			attempted := time.Now().UTC()
+			blocked, err := s.Expert.BlockedDomain(blockedCtx, domain)
+			blockedAttAt = attempted
+			if err != nil {
+				blockedErr = err.Error()
+			} else {
+				blockedVal = blocked
+				blockedFetchedAt = time.Now().UTC()
+			}
+		}()
+	}
+
+	dirURL = s.Expert.DirectoryURL(a.Issuer)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		dirCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
 		attempted := time.Now().UTC()
-		doc, err := s.Toml.Fetch(ctx, domain)
+		entry, err := s.Expert.Directory(dirCtx, a.Issuer)
+		dirAttAt = attempted
 		if err != nil {
 			sub.TomlErr = err.Error()
 			// A host-policy refusal is a decision, not an outage. It is
@@ -189,6 +270,7 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 				sub.TomlLinked = s.Toml.ResolveLinked(ctx, doc, a.Code, a.Issuer)
 			}
 		}
+	}()
 
 		sub.BlockedURL = s.Expert.BlockedDomainURL(domain)
 		attempted = time.Now().UTC()
@@ -293,7 +375,9 @@ func (s *Scanner) SubjectWithHolder(ctx context.Context, a mechanics.Asset, hold
 		return sub, nil
 	}
 	sub.Holder = holder
-	tl, err := s.Horizon.Trustline(ctx, holder, a.Code, a.Issuer)
+	tlCtx, cancel := context.WithTimeout(ctx, s.fetchTimeout())
+	defer cancel()
+	tl, err := s.Horizon.Trustline(tlCtx, holder, a.Code, a.Issuer)
 	if errors.Is(err, horizon.ErrNotFound) {
 		// Holder does not hold the asset; HolderTrustline stays nil with no
 		// error. The source did answer — "not listed" — so this records a

@@ -94,6 +94,19 @@ work.
 This subject is the reason reputation is kept as a separate upward-only axis
 rather than being dropped for purity.
 
+### DOGE (contradictory sources) — handling disagreeing reputation sources
+
+`base: clear` → `final: critical`, escalated.
+
+A regression fixture where consumed reputation sources disagree: StellarExpert's
+`blocked-domains` returns `blocked=false` for `darkpool.digital`, while the
+`directory` tags the issuer as `malicious` and `unsafe`.
+
+Assay consumes both sources and escalates if *either* source flags evidence of
+abuse. Requiring agreement between sources would silently drop known scams when
+one source is incomplete or delayed. This fixture proves that escalation fires
+despite the disagreement.
+
 ### BERKSHIRE — both axes firing
 
 `base: high` → `final: critical`, escalated.

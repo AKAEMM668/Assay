@@ -214,6 +214,8 @@ pub struct AttestationEvent {
 enum DataKey {
     /// Contract admin, the only address permitted to attest.
     Admin,
+    /// Proposed new admin during two-step admin transfer.
+    PendingAdmin,
     /// Attestation for one asset, keyed by its Stellar Asset Contract address.
     Safety(Address),
 }
@@ -232,6 +234,8 @@ pub enum Error {
     /// set but severity is below `SEVERITY_HIGH`. Rejected at write time so a
     /// gate can rely on the invariant at read time.
     InconsistentAttestation = 4,
+    /// No pending admin transfer exists to accept.
+    NoPendingAdmin = 6,
     /// `revoke` was called for an asset with no attestation in storage.
     /// Returned rather than treated as a no-op so a revocation aimed at the
     /// wrong address fails loudly instead of reporting success while the
@@ -370,6 +374,43 @@ impl SafetyRegistry {
         }
         env.storage().instance().set(&DataKey::Admin, &admin);
         extend_instance(&env);
+        Ok(())
+    }
+
+    /// Initiates a two-step transfer of the admin role to `new_admin`.
+    ///
+    /// Requires authorization from the current admin. The transfer takes effect
+    /// only when `new_admin` calls [`Self::accept_admin`]. Two-step transfer
+    /// avoids transferring admin control to an unowned address or typo.
+    pub fn transfer_admin(env: Env, new_admin: Address) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        admin.require_auth();
+
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingAdmin, &new_admin);
+        Ok(())
+    }
+
+    /// Completes a two-step admin transfer, transferring the admin role to the
+    /// pending admin.
+    ///
+    /// Requires authorization from the pending admin. After completion, the old
+    /// admin can no longer attest or manage admin transfers.
+    pub fn accept_admin(env: Env) -> Result<(), Error> {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingAdmin)
+            .ok_or(Error::NoPendingAdmin)?;
+        pending.require_auth();
+
+        env.storage().instance().set(&DataKey::Admin, &pending);
+        env.storage().instance().remove(&DataKey::PendingAdmin);
         Ok(())
     }
 
