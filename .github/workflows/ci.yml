@@ -110,6 +110,15 @@ jobs:
       - name: go test ./internal/attest/
         run: go test ./internal/attest/
 
+      # Mutation testing is deliberately NOT in CI. The decision is recorded in
+      # CONTRIBUTING.md ("Mutation testing: decision recorded", issue #110):
+      # the manual catalogue in docs/mutation-catalogue.md is the standing
+      # practice, run when safety-critical branches change. CI integration was
+      # evaluated and declined: mutation runners recompile per mutant, and even
+      # a 14-mutation run would add minutes of noisy, advisory-only cost to
+      # every PR. This comment exists so the absence is a recorded decision
+      # rather than an oversight.
+
   lint:
     name: golangci-lint
     runs-on: ubuntu-latest

@@ -240,6 +240,40 @@ ASSAY_STELLAREXPERT_URL=http://127.0.0.1:1 ./scripts/reproducibility.sh --attemp
 Two overrides exist for debugging; neither changes what the scanner checks,
 only where it fetches from.
 
+### Mutation testing: decision recorded
+
+**Decision (2026-09-27, issue #110): do not adopt mutation tooling in CI.
+The manual catalogue is the standing practice.**
+
+Mutation testing measures whether the safety tests actually constrain the
+code — nothing else does. The baseline catalogue ([docs/mutation-catalogue.md](docs/mutation-catalogue.md))
+proves the practice has teeth: of 14 safety-critical mutations, 13 were
+cought and one (R-M4) was a real test gap, now closed. So the technique is
+adopted; only automation is declined. The evaluation:
+
+| Option | Runtime cost (measured) | Verdict |
+| --- | --- | --- |
+| **Do nothing** (no mutation measurement at all) | 0 | Rejected — the baseline found a gap the suite did not know about; skipping the practice is how the next one ships |
+| **Manual catalogue** (current) | ~45–60 min of contributor time per run, no dependency | **Adopted as standing practice** |
+| **CI-integrated tooling** (`go-mutesting`-style Go mutation runners, `cargo-mutants` for the contracts) | even at one mutation per invocation, the full catalogue is ≥14 package builds + test runs; measured suite times (0.6 s Go, 0.4 s registry) put the floor near 10–20 min per PR, with the real cost several times that because mutation runners recompile per mutant | Declined for CI |
+
+The reasoning, in the project's own terms: the catalogue found 13/14 the
+first time it was run, which is the argument for keeping the practice. It is
+declined for CI because a mutation check is inherently slow and its failures
+are noisy — a surviving mutant often means "add a test", not "your change is
+broken", and a red-for-that-reason check on every PR becomes a check everyone
+learns to ignore. The project's dependency rule also applies and is recorded:
+any third-party mutation framework would need a decision that it is
+warranted, and the manual procedure is reproducible from
+[docs/mutation-catalogue.md](docs/mutation-catalogue.md) with no dependency
+at all. **Advisory, not blocking, and not over any package: the catalogue
+runs when safety-critical branches change, and its result is the PR
+description's job to record.**
+
+If the corpus of safety-critical branches grows to the point that the manual
+run is skipped in practice, reopen the decision — a standing measurement that
+nobody runs is worse than none.
+
 ## Commits
 
 Present tense, explain the why when it isn't obvious. Keep unrelated changes

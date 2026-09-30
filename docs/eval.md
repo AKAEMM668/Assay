@@ -169,7 +169,62 @@ Measured per-check output (same fixtures as the table above):
 The `reputation` column carries the escalation axis: its finding is `clear` with
 `escalation: true` when nothing is flagged, and `critical` with `blocklisted`
 when it is. That is the one check permitted to escalate, and per-check labels
-keep it from hiding a capability error.
+keep it from hiding a capability error. For `synthetic-reputation-outage` the
+reputation cell is **undetermined**: the blocklist was consulted and failed, so
+the finding makes no severity claim at all — it is compared against its
+`Undetermined` label, not against a level.
+
+### synthetic-reputation-outage — the degraded scan
+
+`base: clear` → `final: clear`, `undetermined: true`, not attestable.
+
+The issue behind #23 was a subject whose reputation source was unreachable
+scanning as a clean answer. `TestOutageDoesNotRenderAsNotListed` and its
+companions pin the behaviour over hand-built subjects, because the fixture
+loader used to render an outage as a clean absence: a missing `blocked.json`
+was indistinguishable from a source that was never asked. With the error-marker
+convention below, the labelled set can state the difference itself, and
+`TestEvalDegradedSubjectIsUndeterminedNotClear` pins it end to end:
+
+- the reputation finding is **undetermined**, not clear — `not listed` was
+  never observed;
+- the report carries `undetermined: true` and names `reputation` in
+  `undetermined_checks`, so a JSON consumer sees a partial answer;
+- severity stays at the measured capability — the outage must not be answered
+  by inventing a level either;
+- `attest.FromReport` refuses the report (`ErrUndetermined`), because a partial
+  scan must never reach the chain.
+
+This subject is also why the corpus's undetermined handling is not hypothetical:
+`make eval-compare` reports it as undetermined and excludes it from movement
+counts, exactly as it would a live degraded run.
+
+## Fixture conventions
+
+Each subject directory holds the captured answer of every consumed source. A
+source is expressed in one of three states, and the loader
+([`internal/eval/load.go`](../internal/eval/load.go)) maps them to the Subject
+fields the checks read:
+
+| State | Fixture | Loader sets |
+| --- | --- | --- |
+| **valid** — the source answered | payload file present: `stellar.toml`, `directory.json`, `blocked.json` | the parsed payload and the source's `FetchedAt` |
+| **unavailable** — the source was consulted and failed | error marker present: `stellar.toml.status`, `directory.err`, `blocked.err` | the matching `*Err` field, verbatim marker text, and `*AttemptedAt` |
+| **missing** — the source was not consulted | neither file | neither the payload nor an `Err` |
+
+The error marker convention extends the existing `stellar.toml.status` pattern:
+the file's trimmed text is what the live fetcher would have recorded — an HTTP
+status number for a status failure (`429`), or any error text for a transport
+failure. A blank marker is treated as absent, never as an empty error.
+
+The distinction is the point. A missing `blocked.json` and a `blocked.err`
+holding `429` used to produce the same Subject, which made the degraded state
+inexpressible in the labelled set. The three states are pinned by
+`TestEvalLoaderStates`, and the unavailable state by the degraded subject in
+the corpus. `synthetic-`-prefixed directories mark fixtures assembled for a
+property under test rather than captured from a live asset; their provenance
+is recorded in the directory's README and in
+[`internal/mechanics/testdata/PROVENANCE.md`](../internal/mechanics/testdata/PROVENANCE.md).
 
 ## Cross-version comparison
 
