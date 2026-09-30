@@ -121,6 +121,9 @@ verify-gate:
 	@test -n "$(BASE)" || { echo 'usage: make verify-gate BASE=<sha-or-ref> HEAD=<sha-or-ref>'; exit 2; }
 	./scripts/merge-gate.sh "$(BASE)" "$(HEAD)"
 
+test-gate:
+	bash ./scripts/test-merge-gate.sh
+
 # Records the labelled corpus's classification, per subject and per check.
 # Commit the result when the classifier's output is intended to change; it is
 # the baseline eval-compare diffs against.
