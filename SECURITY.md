@@ -17,6 +17,13 @@ cleanly. What Assay produces is a **claim about whether someone's money can be
 taken**, and a contract that gates on that claim. The security-relevant failures
 are the ones that make a claim wrong in the dangerous direction.
 
+[docs/threat-model.md](docs/threat-model.md) names the actors, what each can do,
+and every attack class that is already known — defended, accepted as a bounded
+risk, or out of scope, with the reason in each case. Read it before reporting:
+a gap listed there as accepted is still worth a report if you think the accepted
+reasoning is wrong, but it is not a discovery, and the answer will be the
+reasoning rather than a fix.
+
 ### Critical: anything that under-reports risk
 
 These are the bugs that matter most, because someone acts on the output.
@@ -88,3 +95,5 @@ Known limitations, documented rather than hidden, in
 [docs/contract-interface.md](docs/contract-interface.md#not-done-yet):
 a single admin key can write any attestation, and `evidence_hash` has no
 canonical encoding yet, so it cannot currently be verified independently.
+The full list, with the direction each one fails in, is
+[docs/threat-model.md](docs/threat-model.md).

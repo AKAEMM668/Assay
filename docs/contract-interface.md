@@ -32,6 +32,7 @@ is designed (not yet built) in [attestation-writer.md](attestation-writer.md).
 ## ABI
 
 ```rust
+// What storage holds, returned by get_safety.
 pub struct Safety {
     pub severity: u32,             // 0..=4, capability-only
     pub flags: u32,                // mechanic bitset
@@ -39,21 +40,129 @@ pub struct Safety {
     pub attested_at: u64,          // ledger timestamp
 }
 
+// One element of an attest_many batch: the arguments of attest(), grouped.
+pub struct Attestation {
+    pub asset: Address,
+    pub severity: u32,
+    pub flags: u32,
+    pub evidence_hash: BytesN<32>,
+}
+
+/// The largest batch attest_many accepts. The cap is derived from the
+/// live transaction resource limits; see "attest_many" below.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool;
 pub fn is_safe_masked(env: Env, asset: Address, forbidden_mask: u32, max_age_secs: u64) -> bool;
 pub fn attest(env: Env, asset: Address, severity: u32, flags: u32, evidence_hash: BytesN<32>) -> Result<(), Error>;
+pub fn attest_many(env: Env, attestations: Vec<Attestation>) -> Result<(), Error>;
 pub fn revoke(env: Env, asset: Address) -> Result<(), Error>;
 pub fn init(env: Env, admin: Address) -> Result<(), Error>;
 ```
 
+The `Vec<Attestation>` argument is confirmed against the built artifact rather
+than assumed: `stellar contract info interface` on the compiled wasm publishes
+`fn attest_many(env: soroban_sdk::Env, attestations: soroban_sdk::Vec<Attestation>)`
+with `Attestation` as a contracttype UDT, so a `Vec` of a `#[contracttype]`
+struct is a supported argument type in soroban-sdk 27.
+
 | Error | Code | Returned by |
 | --- | --- | --- |
 | `AlreadyInitialized` | 1 | `init` on an initialized contract |
-| `NotInitialized` | 2 | `attest`, `revoke` before `init` |
-| `InvalidSeverity` | 3 | `attest` with severity above 4 |
-| `InconsistentAttestation` | 4 | `attest` with the clawback bit below `SEVERITY_HIGH` |
+| `NotInitialized` | 2 | `attest`, `attest_many`, `revoke` before `init` |
+| `InvalidSeverity` | 3 | `attest`, `attest_many` with severity above 4 |
+| `InconsistentAttestation` | 4 | `attest`, `attest_many` with the clawback bit below `SEVERITY_HIGH` |
 | `NotAttested` | 5 | `revoke` for an asset with no attestation |
+| `BatchTooLarge` | 6 | `attest_many` with more than `MAX_BATCH_SIZE` elements |
+
+### `attest_many`: many attestations in one transaction
+
+`attest_many(attestations)` is `attest`, repeated. One transaction writes up to
+`MAX_BATCH_SIZE` attestations, which is what lets a re-attestation run cover a
+useful set of assets instead of one asset per ledger and per fee.
+
+Every element is written exactly as `attest` writes it — the same
+`DataKey::Safety(asset)` key, the same stored `Safety`, the same `Attested`
+event — and both entrypoints call the same validation function. A batch is
+**not** a lower bar:
+
+- `InvalidSeverity` and `InconsistentAttestation` are the same checks, on every
+  element. There is no batch path around the confiscation invariant.
+- `require_auth` on the admin is required, as for `attest`. An empty batch is
+  authorized too: who may call an entrypoint is a property of the entrypoint,
+  not of what it was handed.
+- Per-asset reads after a batch are identical to per-asset reads after the
+  equivalent single writes. The contract test
+  `batch_reads_match_single_write_path` asserts the stored value is equal, not
+  merely equivalent.
+
+#### All-or-nothing, not partial
+
+**A batch is applied whole or not at all.** Every element is validated before
+the first write, so a batch containing one bad element stores nothing, publishes
+nothing, and returns the same typed error the single-write path returns for that
+element. There is no state in which some assets of a batch were re-attested and
+others silently were not, and the tail is never truncated to make a partly-bad
+batch fit.
+
+This is stronger than the host gives for free, and the extra is worth stating
+precisely rather than overclaiming. Soroban already rolls the whole transaction
+back on failure, so a batch could not half-commit even with a write-as-you-go
+loop. What validating up front adds is (a) a failure that is *typed and
+deterministic* — an error a caller can branch on, rather than a resource failure
+from whichever write happened to be in flight — and (b) a failure that is cheap,
+because a batch whose last element is bad does not first pay to write every
+element before it.
+
+#### The cap, and why it is 50
+
+The bound is a network limit, not a round number. Read live on 2026-09-27 with
+`stellar network settings --network testnet` (protocol 28), and measured against
+the same enforcement the SDK applies in the tests:
+
+| Limit | Live network | A full 50-element batch | Used |
+| --- | --- | --- | --- |
+| **contract event bytes** | **16 384** | **10 000** | **61% — the binding limit** |
+| ledger entries written | 200 | 51 | 26% |
+| transaction footprint entries | 400 | 105 | 26% |
+| bytes written | 132 096 | 14 072 | 11% |
+| instructions | 400 000 000 | 3 275 513 | 0.8% |
+| memory | 41 943 040 | 514 609 | 1.2% |
+
+Each element publishes its own `Attested` event and one such event is exactly
+200 bytes, so the event budget admits **at most 81 elements** however frugal the
+writes are. That is the hard ceiling: a 100-element batch was measured failing
+with `contract events size bytes: 20000 > 16384`. 50 sits at 61% of that
+budget — room for the event schema to grow before the cap becomes wrong — and
+costs about a quarter of every other limit, including the write budget one would
+naturally have guessed was binding.
+
+Per-asset events are kept rather than collapsed into one batch-sized event for
+precisely this reason. A single event would raise the ceiling, but it would
+take away the property that an indexer subscribed to `("attest", asset)` sees
+every write to that asset without decoding batch bodies. A higher cap is worth
+less than that.
+
+`batch_size_bound_is_measured_and_holds_headroom` in the contract tests runs a
+full batch with the SDK's mainnet resource enforcement switched on (which
+`Env::default` enables), asserts it fits every limit, and pins the 200-byte
+per-event cost so the cap is re-derived rather than silently wrong if the event
+or the write path changes.
+
+#### Empty batches, and one timestamp per batch
+
+An empty batch succeeds and does nothing: no storage write, no event, and no
+instance TTL extension. That is the honest reading of all-or-nothing over zero
+elements, and it lets a pipeline pass whatever a scan produced without
+special-casing "nothing changed this round".
+
+Every element of one batch carries the same `attested_at`: the timestamp of the
+ledger the batch landed in. `attested_at` records when the write happened, not
+when each scan ran, and the elements of one call were written at the same
+instant. If the same asset appears twice in a batch, both are applied in order
+and both events are published, with the second write winning — exactly what two
+calls to `attest` would have done.
 
 ### `revoke`: withdrawing an attestation
 
@@ -142,6 +251,10 @@ happen.
 | --- | --- | --- |
 | `symbol_short!("attest")` | asset `Address` | `Map<Symbol, Val>` with keys `severity: u32`, `flags: u32`, `attested_at: u64` |
 | `symbol_short!("revoke")` | asset `Address` | `Map<Symbol, Val>` with key `revoked_at: u64` |
+
+`attest_many` publishes one such `attest` event per element, in batch order,
+with no batch-specific event or decoding path. A rejected batch publishes
+nothing at all.
 
 A successful `revoke` publishes the second row. A failed revoke (`NotAttested`,
 unauthorized) publishes nothing. The `revoke` event uses the same topic layout
@@ -429,9 +542,9 @@ hashed field is a false attestation waiting to be written.
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
   issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
-- **TTL is extended on write only.** `init`, `attest` and `revoke` extend the
-  contract instance and code to the network maximum, and `attest` extends the
-  attestation entry too. Reads extend nothing. An attestation nobody re-attests
+- **TTL is extended on write only.** `init`, `attest`, `attest_many` and
+  `revoke` extend the contract instance and code to the network maximum, and the
+  two write paths extend the attestation entries they write. Reads extend nothing. An attestation nobody re-attests
   is archived after roughly 180 days on current testnet parameters. It is then
   restored on the next access at the reader's expense, not lost. See
   [deployment.md](deployment.md#entry-lifetime). The live testnet deployment

@@ -71,6 +71,7 @@ carries an explicit, evaluated position on legitimate clawback use. See
 | [docs/attestation-run.md](docs/attestation-run.md) | Every asset scanned, what each check returned, and what the run exposed about the scanner |
 | [docs/history.md](docs/history.md) | The observation history API: what is retained, for how long, and what an empty history means |
 | [docs/eval.md](docs/eval.md) | Labelled trap/legitimate set and current results |
+| [docs/threat-model.md](docs/threat-model.md) | The actors, what each can do, and which attacks Assay defends against, accepts, or scopes out |
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
 | [docs/asset-lists.md](docs/asset-lists.md) | Consuming SEP-0042 Stellar Asset Lists as a second curation source, and why listing is never a safety signal |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
@@ -109,6 +110,12 @@ Four things are worth knowing before you rely on any of it:
   never what they are likely to do. A regulated stablecoin with clawback and a
   scam with clawback score the same, on purpose — see
   [the severity model](docs/severity-model.md).
+
+The gaps are not left implicit. [docs/threat-model.md](docs/threat-model.md)
+names the actors, states which attacks are defended (with the test that holds
+them), which are accepted risks, and which are out of scope — including the one
+that matters most, that a single compromised attester key can currently cause an
+admission.
 
 ## License
 

@@ -152,10 +152,14 @@ one-persistent-entry write adds a fraction of an XLM at most. Ten assets
 re-attested daily is on the order of a few XLM **per year** — fees do not
 constrain the design, which is why [freshness.md](freshness.md) can recommend
 a daily schedule plus event-driven re-attestation without a budget argument.
-Batching writes ([#10](https://github.com/use-assay/Assay/issues/10)) is an
-optimization for a much larger set, not a prerequisite: Soroban transactions
-carry exactly one contract invocation, so "batching" means fewer *runs*, not
-bigger transactions.
+That fee argument means batching is not required for the list above. It is
+available anyway, because the ceiling it lifts is not the fee one. `attest_many`
+(see [contract-interface.md](contract-interface.md#attest_many-many-attestations-in-one-transaction))
+writes up to `MAX_BATCH_SIZE` assets in one contract invocation, all-or-nothing,
+so the per-ledger limit on coverage moves from one asset to one batch. What
+bounds a batch is the transaction's event budget rather than its cost: every
+element publishes its own per-asset event, and 50 of them consume 61% of the
+16 384-byte budget.
 
 The fee floor is not zero: a run whose submissions fail on an unfunded key
 must be visible as a failure (see question 5), not as an empty success.
