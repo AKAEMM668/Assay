@@ -53,8 +53,9 @@ the pipeline; it redesigns the contract.
 
 The key lives in the `assay-attester` stellar CLI identity
 ([deployment.md](deployment.md) records its address). Key custody and rotation
-procedure are operational concerns tracked as
-[#120](https://github.com/use-assay/Assay/issues/120); this design only
+procedure are operational concerns documented in
+[attester-key.md](attester-key.md) and tracked as
+[#150](https://github.com/use-assay/Assay/issues/150); this design only
 requires that the pipeline never accepts a seed file path from a report or a
 scan — the key is configuration, and the pipeline fails to start without it
 rather than falling back to an unsigned simulation that *looks* like success.
@@ -151,10 +152,14 @@ one-persistent-entry write adds a fraction of an XLM at most. Ten assets
 re-attested daily is on the order of a few XLM **per year** — fees do not
 constrain the design, which is why [freshness.md](freshness.md) can recommend
 a daily schedule plus event-driven re-attestation without a budget argument.
-Batching writes ([#10](https://github.com/use-assay/Assay/issues/10)) is an
-optimization for a much larger set, not a prerequisite: Soroban transactions
-carry exactly one contract invocation, so "batching" means fewer *runs*, not
-bigger transactions.
+That fee argument means batching is not required for the list above. It is
+available anyway, because the ceiling it lifts is not the fee one. `attest_many`
+(see [contract-interface.md](contract-interface.md#attest_many-many-attestations-in-one-transaction))
+writes up to `MAX_BATCH_SIZE` assets in one contract invocation, all-or-nothing,
+so the per-ledger limit on coverage moves from one asset to one batch. What
+bounds a batch is the transaction's event budget rather than its cost: every
+element publishes its own per-asset event, and 50 of them consume 61% of the
+16 384-byte budget.
 
 The fee floor is not zero: a run whose submissions fail on an unfunded key
 must be visible as a failure (see question 5), not as an empty success.
@@ -205,3 +210,110 @@ dry-run output is the earliest possible signal that an attestation on-chain is
 about to diverge from what the code now produces.
 
 ## Shape of the command
+
+```
+cmd/assay-attester
+  --config PATH        asset list + network + contract ID + cadence
+  --dry-run            scan, derive, print; never sign
+  --once               one pass, then exit (the unit schedulers invoke)
+  --watch              issuer watcher for event-driven re-attestation
+```
+
+Per asset, one pass is: `scan` → `mechanics` report → `attest.FromReport` →
+(if unchanged evidence-hash **and** still fresh per
+[freshness.md](freshness.md), skip — re-attestation with identical evidence
+moves only the timestamp, and doing it pointlessly doubles the write load) →
+submit → record. The watcher pass is the same loop keyed on capability
+transitions detected by
+[`temporal`](../internal/temporal) between consecutive scans.
+
+## Threat model
+
+Stated for the single-admin deployment this design ships against. "The
+attester" below means whoever holds the admin key — including an attacker who
+compromised it.
+
+**What a malicious or compromised attester can do:**
+
+- Attest **any severity for any asset**, including `clear` for a known scam
+  and `high` for an asset it does not like. Nothing on-chain prevents this;
+  the contract cannot check an `evidence_hash`, it only stores it.
+- **Overwrite** an existing attestation. `attest` keeps no history
+  ([#92](https://github.com/use-assay/Assay/issues/92)), so the overwritten
+  values are gone. `revoke`
+  ([#86](https://github.com/use-assay/Assay/issues/86)) lets an honest admin
+  withdraw a bad write rather than overwrite it, but the same key can also
+  revoke a *correct* attestation. That is a denial of service, and it fails
+  closed. `revoke` is in the contract source but not yet on the live testnet
+  deployment ([deployment.md](deployment.md#migrating-to-a-registry-with-revoke)).
+- Attest assets **never scanned**, with an `evidence_hash` of all zeroes.
+- Refuse to write, or stop writing — the fail-open-by-neglect attack. It
+  degrades the registry to staleness, which `is_safe`'s `max_age_secs`
+  converts to fail-closed at the consumer, at a rate the consumer chooses.
+
+**What `evidence_hash` protects against — and what it does not:**
+
+- *It makes a malicious write **detectable**, not preventable.* Any attestation
+  whose hash does not reproduce from a re-scan is provably not backed by the
+  evidence it implies. That converts "trust the attester" into "verify the
+  attester", after the fact, by anyone. This is worth having — it is the
+  difference between a lie and a checkable lie — but it is a detective
+  control. A consumer that gates *without* verifying hashes is still fully
+  exposed to a malicious writer.
+- *It does not survive a scanner downgrade*
+  ([#54](https://github.com/use-assay/Assay/issues/54)). If the attacker
+  controls which code runs, the hash is internally consistent with whatever
+  the compromised scanner concluded. Version binding
+  ([#40](https://github.com/use-assay/Assay/issues/40)) and check-set binding
+  ([#42](https://github.com/use-assay/Assay/issues/42)) narrow this; nothing
+  eliminates it except threshold attestation.
+- *It does not bind the network* — closed. The preimage binds the network
+  passphrase under `assay-evidence-v3`
+  ([#41](https://github.com/use-assay/Assay/issues/41)), so a testnet scan and
+  a pubnet scan of the same code+issuer no longer hash identically, and the
+  scanner refuses to run when its network cannot be determined before any
+  fetch. See [contract-interface.md](contract-interface.md), "The preimage
+  binds the network".
+
+**Consequence for the deployment claim this design is allowed to make:** the
+testnet pipeline demonstrates and exercises the machinery. It does not make
+the registry trustworthy; that requires the multi-attestor work
+([#88](https://github.com/use-assay/Assay/issues/88)) behind a signed threat
+model ([#52](https://github.com/use-assay/Assay/issues/52)). This document
+asks for maintainer sign-off on exactly that scope boundary.
+
+## Verified against live surfaces, 2026-09-25
+
+- `stellar` CLI 27.1.0 installed locally; `stellar contract invoke` supports
+  `--send=no` (simulate, do not sign or submit — the mechanism dry-run and the
+  read path use), `--fee` (override the simulated resource fee), and `--cost`.
+  Default behaviour submits when simulation indicates writes or required auth,
+  which is the correct default for `attest` (it always writes) and the reason
+  reads use `--send=no` explicitly.
+- Testnet RPC `getFeeStats`: inclusion fee mode 100 stroops, p95 200 stroops.
+  Fee posture for the daily schedule is therefore negligible; no batching or
+  fee-auction machinery is designed in.
+- CAP-0035 re-read from `stellar/stellar-protocol@master`: clawback
+  authorization is fixed at trustline creation
+  (`AUTH_CLAWBACK_ENABLED_FLAG` "must be set when a trustline is created";
+  `SetTrustLineFlagsOp` can unset `TRUSTLINE_CLAWBACK_ENABLED_FLAG` but cannot
+  add it retroactively), so a *newly-set* issuer clawback flag does not reach
+  existing trustlines. This is the fact
+  [freshness.md](freshness.md#the-exposure-window-stated-honestly) is built
+  on. Confirmed against both the live pubnet and testnet ledgers (~5 s close
+  cadence, 2026-09-25) that Horizon serves ledger state in real time.
+
+## What this document does not decide
+
+- Revocation ([#86](https://github.com/use-assay/Assay/issues/86)),
+  TTL extension ([#87](https://github.com/use-assay/Assay/issues/87)),
+  multi-attestor ([#88](https://github.com/use-assay/Assay/issues/88)),
+  admin rotation ([#89](https://github.com/use-assay/Assay/issues/89)),
+  key custody ([#150](https://github.com/use-assay/Assay/issues/150), see
+  [attester-key.md](attester-key.md)),
+  the re-attestation runbook
+  ([#115](https://github.com/use-assay/Assay/issues/115)).
+- Whether `undetermined` belongs in the preimage
+  ([#43](https://github.com/use-assay/Assay/issues/43)) — irrelevant here,
+  because undetermined reports are refused before a preimage would be hashed
+  into an attestation.

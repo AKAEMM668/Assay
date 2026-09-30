@@ -3,6 +3,10 @@
 This is the part of Assay worth arguing about. Reading a flag is trivial and
 deterministic. Deciding what a flag *means* is the whole product.
 
+The vocabulary this page argues with — `clear`, `unevaluated`, `valid`,
+`unknown`, `stale`, `undetermined` — is defined, together with the state each is
+most often confused with, in [the glossary](glossary.md).
+
 ## The problem
 
 `auth_clawback_enabled` lets an issuer confiscate your balance and burn it,
@@ -221,3 +225,4 @@ at all and is a known scam.
 
 Assay scans one specific attack surface. It says so rather than implying
 coverage it does not have.
+- [Temporal Trust Model](temporal.md)

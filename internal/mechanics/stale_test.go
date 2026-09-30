@@ -30,7 +30,7 @@ func newClearReport(scannedAt time.Time) *mechanics.Report {
 		State:          mechanics.StateValid,
 		Stale:          false,
 		Undetermined:   false,
-		ScannedAt:      scannedAt,
+		ScannedAt:      mechanics.NewCanonicalTime(scannedAt),
 		Findings: []mechanics.Finding{
 			{
 				Check:     "capability",
