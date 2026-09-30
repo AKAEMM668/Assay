@@ -170,7 +170,7 @@ func TestFailureEvidenceCarriesAttemptTime(t *testing.T) {
 		if !ev.Attempted {
 			t.Error("failure evidence is not marked Attempted: an attempt is not an answer")
 		}
-		if !ev.RetrievedAt.Equal(mustTime(t, attempted)) {
+		if !ev.RetrievedAt.Time().Equal(mustTime(t, attempted)) {
 			t.Errorf("failure evidence carries %s, want the attempt time %s", ev.RetrievedAt, attempted)
 		}
 	}
@@ -201,9 +201,9 @@ func TestEvidenceHashUnchangedAcrossTheLabelledSet(t *testing.T) {
 		// future: identical output is the property under test, because the
 		// preimage commits to claims, not to the clock.
 		for i := range rep.Evidence {
-			rep.Evidence[i].RetrievedAt = rep.Evidence[i].RetrievedAt.Add(100 * 24 * time.Hour)
+			rep.Evidence[i].RetrievedAt = mechanics.NewCanonicalTime(rep.Evidence[i].RetrievedAt.Time().Add(100 * 24 * time.Hour))
 		}
-		rep.ScannedAt = rep.ScannedAt.Add(100 * 24 * time.Hour)
+		rep.ScannedAt = mechanics.NewCanonicalTime(rep.ScannedAt.Time().Add(100 * 24 * time.Hour))
 		shifted, err := attest.FromReport(rep)
 		if err != nil {
 			t.Fatalf("%s: FromReport (shifted): %v", dir, err)
