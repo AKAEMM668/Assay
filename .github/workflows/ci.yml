@@ -69,7 +69,7 @@ jobs:
 
       - name: upload coverage profile
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-profile
           path: coverage.out
