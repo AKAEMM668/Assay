@@ -10,7 +10,7 @@ NETWORK ?= testnet
 SOURCE ?= assay-attester
 CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 
-.PHONY: all build test cover lint fmt vet run clean \
+.PHONY: all build test cover lint fmt vet run clean offline-test \
 	contract-test contract-lint contract-build \
 	build-contract deploy-testnet attest read verify-gate verify-wasm \
 	eval-record eval-compare
