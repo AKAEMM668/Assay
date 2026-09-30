@@ -580,6 +580,35 @@ fn attest_extends_ttl_to_network_max() {
     assert_eq!(instance_ttl(&env, &client), max);
 }
 
+/// init extends the contract instance to the network maximum, so the admin and
+/// the deployed wasm stay live before any attestation exists. This is the one
+/// write that happens before there is an entry to keep alive.
+#[test]
+fn ttl_init_extends_instance_to_network_max() {
+    let (env, client, _) = setup();
+
+    assert_eq!(instance_ttl(&env, &client), max_ttl(&env, &client));
+}
+
+/// revoke is a write and extends the instance TTL exactly as attest does.
+/// Without this, retracting the last attestation would leave the contract
+/// instance to age out even though a caller had just written to it.
+#[test]
+fn ttl_revoke_extends_instance_to_network_max() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+    let max = max_ttl(&env, &client);
+
+    let seq = env.ledger().sequence();
+    env.ledger().set_sequence_number(seq + 10_000);
+    assert_eq!(instance_ttl(&env, &client), max - 10_000);
+
+    client.revoke(&asset);
+    assert_eq!(instance_ttl(&env, &client), max);
+}
+
 /// Re-attesting renews the TTL: an entry that has aged is pushed back out to
 /// the maximum by the next write.
 #[test]
