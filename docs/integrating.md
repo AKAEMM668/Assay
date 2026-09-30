@@ -28,8 +28,9 @@ than the one your transaction lands in.
 
 So you are trusting the attester. Today that is one key. `evidence_hash` is what
 makes the trust checkable rather than absolute: it commits to the exact evidence
-the scanner read, and anyone can re-scan and recompute it. See
-[contract-interface.md](contract-interface.md).
+the scanner read, and anyone can re-scan and recompute it. The complete
+statement of what the admin key can and cannot do is in [Trust boundary: the
+admin key](contract-interface.md#trust-boundary-the-admin-key).
 
 ## 1. Declare the interface
 
@@ -317,7 +318,8 @@ the third cause of a mismatch — the verifier's own environment, which is
   must treat as "unknown", and which — if you gate correctly — means your
   contract refuses nearly every asset on the network.
 - **One key can write any attestation.** There is no multisig and no threshold
-  of independent attesters yet.
+  of independent attesters yet. The complete statement of powers and limits is
+  in [Trust boundary: the admin key](contract-interface.md#trust-boundary-the-admin-key).
 - **Nothing refreshes the attestations.** They are exactly as fresh as their
   `attested_at`. Choose a `max_age_secs` you would actually accept.
 - Testnet is periodically reset, which removes these attestations. The live
