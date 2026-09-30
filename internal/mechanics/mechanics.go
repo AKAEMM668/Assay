@@ -204,6 +204,17 @@ type Subject struct {
 	BlockedErr           string
 	BlockedFetchedAt     time.Time
 	BlockedAttemptedAt   time.Time
+	// BlockedSkipped is set when the malicious-domain blocklist could not be
+	// consulted at all, because there was no domain to key the lookup on: the
+	// issuer advertises no home_domain. It is distinct from BlockedErr (the
+	// lookup was attempted and failed) and from a nil Blocked with no error
+	// (the lookup was made and found no entry). When set, Blocked is nil and
+	// BlockedErr is empty.
+	//
+	// The distinction is load-bearing because a blocklist hit escalates
+	// severity: a report that could not run the lookup must not read as one
+	// that ran it and found nothing.
+	BlockedSkipped string
 
 	// AssetLists are the SEP-0042 curated lists consulted for this asset, one
 	// entry per configured list, in configuration order. Empty when no list is
@@ -356,6 +367,20 @@ func (s *Subject) HomeDomain() string {
 		return ""
 	}
 	return s.Issuer.HomeDomain
+}
+
+// DomainVerified reports whether the issuer's advertised home_domain
+// reciprocally claims this exact asset: the stellar.toml resolved and its
+// CURRENCIES list names both this code and this issuer. It is the same test the
+// sep1-domain check performs, exposed as a predicate so a check can say whether
+// a domain-keyed claim rests on a verified or an unverified link. It does not
+// establish that the domain's operator is who they appear to be; it establishes
+// only that the domain published the claim.
+func (s *Subject) DomainVerified() bool {
+	if s.HomeDomain() == "" || s.Toml == nil {
+		return false
+	}
+	return s.Toml.Claims(s.Asset.Code, s.Asset.Issuer)
 }
 
 // Check is a single mechanic classifier. Implementations are pure functions

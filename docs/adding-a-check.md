@@ -75,6 +75,7 @@ type Subject struct {
 	BlockedErr           string
 	BlockedFetchedAt     time.Time
 	BlockedAttemptedAt   time.Time
+	BlockedSkipped       string     // set when no domain existed to key the lookup on
 
 	ScannedAt time.Time // when the scan started
 }

@@ -427,6 +427,84 @@ func (t *singleHostTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return http.DefaultTransport.RoundTrip(req)
 }
 
+// TestSubjectRecordsSkippedBlocklistWhenNoHomeDomain covers the missing state
+// at the scanner: with no home_domain there is no domain to key the blocklist
+// on, so the lookup must not be attempted and the skip must be recorded rather
+// than left as an empty result. An empty result reads downstream as "the lookup
+// ran and found no entry" — and a blocklist hit escalates severity, so an
+// unread lookup must not be allowed to look like a clean one.
+func TestSubjectRecordsSkippedBlocklistWhenNoHomeDomain(t *testing.T) {
+	horizonSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/assets":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"_embedded": map[string]any{"records": []map[string]any{{
+					"asset_type":   "credit_alphanum4",
+					"asset_code":   "USDC",
+					"asset_issuer": scanIssuer,
+					"flags":        map[string]bool{},
+				}}},
+			})
+		case "/accounts/" + scanIssuer:
+			// No home_domain at all — the VELO shape.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"account_id": scanIssuer,
+				"flags":      map[string]bool{},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(horizonSrv.Close)
+
+	var blockedRequests int32
+	expertSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/explorer/directory/blocked-domains/") {
+			atomic.AddInt32(&blockedRequests, 1)
+		}
+		// The directory answers 200-with-empty-body for an unlisted address.
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(expertSrv.Close)
+
+	sc := scan.New()
+	sc.Horizon.BaseURL = horizonSrv.URL
+	sc.Expert.BaseURL = expertSrv.URL
+
+	sub, err := sc.Subject(context.Background(), mustParse(t, "USDC-"+scanIssuer))
+	if err != nil {
+		t.Fatalf("Subject: %v", err)
+	}
+	if sub.BlockedSkipped == "" {
+		t.Fatal("no home_domain did not record that the blocklist lookup was skipped")
+	}
+	if sub.Blocked != nil || sub.BlockedErr != "" {
+		t.Fatalf("skipped lookup left Blocked=%+v BlockedErr=%q, want both empty", sub.Blocked, sub.BlockedErr)
+	}
+	if got := atomic.LoadInt32(&blockedRequests); got != 0 {
+		t.Fatalf("the blocklist endpoint was queried %d times with no domain to key on", got)
+	}
+
+	// The gap must reach the report as undetermined, not as a clean result.
+	rep, err := sc.Engine.Run(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rep.Undetermined {
+		t.Fatal("a scan whose blocklist could not be consulted must be undetermined")
+	}
+	var named bool
+	for _, id := range rep.UndeterminedChecks {
+		if id == "reputation" {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("reputation not named in UndeterminedChecks: %v", rep.UndeterminedChecks)
+	}
+}
+
 func mustParse(t *testing.T, s string) mechanics.Asset {
 	t.Helper()
 	a, err := scan.ParseAsset(s)

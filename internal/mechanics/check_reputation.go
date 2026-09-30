@@ -69,7 +69,16 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		})
 	}
 
-	if s.BlockedErr != "" {
+	// The blocklist is keyed on a domain. scan.Scanner records the skip in
+	// BlockedSkipped; the HomeDomain check is a fallback so a hand-built
+	// subject that omits the field cannot silently reintroduce the gap.
+	blockedSkipped := s.BlockedSkipped
+	if blockedSkipped == "" && s.HomeDomain() == "" {
+		blockedSkipped = "the issuer advertises no home_domain to key the lookup on"
+	}
+	if blockedSkipped != "" {
+		unasked = append(unasked, "the malicious-domain blocklist ("+blockedSkipped+")")
+	} else if s.BlockedErr != "" {
 		unreachable = append(unreachable, "the malicious-domain blocklist")
 		f.Evidence = append(f.Evidence, Evidence{
 			Source:      "stellar.expert/blocked-domains",
@@ -120,6 +129,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		}
 	}
 
+	blocklistHit := s.Blocked != nil && s.Blocked.Blocked
 	if s.Blocked != nil {
 		f.Evidence = append(f.Evidence, Evidence{
 			Source:      "stellar.expert/blocked-domains",
@@ -127,7 +137,7 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			Claim:       fmt.Sprintf("domain %q blocked=%t", s.Blocked.Domain, s.Blocked.Blocked),
 			RetrievedAt: NewCanonicalTime(s.BlockedFetchedAt),
 		})
-		if s.Blocked.Blocked {
+		if blocklistHit {
 			flagged = append(flagged, fmt.Sprintf(
 				"the malicious-domain blocklist contains %q", s.Blocked.Domain))
 		}
@@ -209,12 +219,16 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		return f, nil
 	}
 
-	// Nothing was flagged — but that only means something if every source
-	// actually answered. Reporting an outage as a clean result is the one
+	// Nothing was flagged — but that only means something if every source was
+	// actually read. Reporting a missing source as a clean result is the one
 	// failure this check must never have, because reputation is the only axis
 	// that can escalate: an asset that is critical solely by escalation reads
-	// as its bare capability severity when this source is unavailable.
-	if len(unreachable) > 0 {
+	// as its bare capability severity when a source is unavailable.
+	//
+	// A source that was never asked leaves the same gap as one that failed to
+	// answer, so both mark the finding undetermined; the wording distinguishes
+	// a missing answer from a missing question.
+	if len(unreachable) > 0 || len(unasked) > 0 {
 		f.Undetermined = true
 		f.Reasoning = "Reputation could not be determined: " + joinPowers(unreachable) +
 			" did not answer, and the failure is recorded above verbatim. This is " +

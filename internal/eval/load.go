@@ -98,6 +98,10 @@ func LoadSubject(fixturesDir, dir string) (*mechanics.Subject, error) {
 	s.BlockedURL = "https://api.stellar.expert/explorer/directory/blocked-domains/"
 	if acct.HomeDomain != "" {
 		s.BlockedURL += acct.HomeDomain
+	} else {
+		// No domain to key the blocklist on: mirror the live scanner so a
+		// no-home_domain fixture exercises the same path production does.
+		s.BlockedSkipped = "the issuer advertises no home_domain to key the lookup on"
 	}
 	s.BlockedAttemptedAt = fixtureTime
 	if _, err := os.Stat(filepath.Join(base, "blocked.json")); err == nil {
