@@ -19,7 +19,7 @@ jobs:
       # `stable` moved to Go 1.27, golangci-lint v2.12.2 (built with 1.26)
       # panicked type-checking the newer standard library, and this check
       # failed on every push for reasons unrelated to the code under test.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -100,7 +100,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
@@ -119,7 +119,7 @@ jobs:
       # `stable` moved to Go 1.27, golangci-lint v2.12.2 (built with 1.26)
       # panicked type-checking the newer standard library, and this check
       # failed on every push for reasons unrelated to the code under test.
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: go.mod
           cache: true
