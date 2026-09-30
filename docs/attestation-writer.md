@@ -53,8 +53,9 @@ the pipeline; it redesigns the contract.
 
 The key lives in the `assay-attester` stellar CLI identity
 ([deployment.md](deployment.md) records its address). Key custody and rotation
-procedure are operational concerns tracked as
-[#120](https://github.com/use-assay/Assay/issues/120); this design only
+procedure are operational concerns documented in
+[attester-key.md](attester-key.md) and tracked as
+[#150](https://github.com/use-assay/Assay/issues/150); this design only
 requires that the pipeline never accepts a seed file path from a report or a
 scan — the key is configuration, and the pipeline fails to start without it
 rather than falling back to an unsigned simulation that *looks* like success.
@@ -300,7 +301,8 @@ asks for maintainer sign-off on exactly that scope boundary.
   TTL extension ([#87](https://github.com/use-assay/Assay/issues/87)),
   multi-attestor ([#88](https://github.com/use-assay/Assay/issues/88)),
   admin rotation ([#89](https://github.com/use-assay/Assay/issues/89)),
-  key custody ([#120](https://github.com/use-assay/Assay/issues/120)),
+  key custody ([#150](https://github.com/use-assay/Assay/issues/150), see
+  [attester-key.md](attester-key.md)),
   the re-attestation runbook
   ([#115](https://github.com/use-assay/Assay/issues/115)).
 - Whether `undetermined` belongs in the preimage

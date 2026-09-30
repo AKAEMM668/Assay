@@ -58,18 +58,21 @@ carries an explicit, evaluated position on legitimate clawback use. See
 
 | Document | What's in it |
 | --- | --- |
+| [docs/glossary.md](docs/glossary.md) | Every state Assay reports — severity, accountability, verdict state, `undetermined` — and the state each is most often confused with |
 | [docs/cli.md](docs/cli.md) | The `assay` binary: scan, attestation, history, serve |
 | [docs/severity-model.md](docs/severity-model.md) | The judgment layer: severity levels, the legitimate-use carve-out, and why |
 | [docs/checks.md](docs/checks.md) | Each mechanic Assay checks, and what it can and cannot conclude |
 | [docs/contract-interface.md](docs/contract-interface.md) | `get_safety(asset)` design and the `evidence_hash` encoding |
 | [docs/integrating.md](docs/integrating.md) | How your contract calls `get_safety` and gates on both severity and the bitset |
 | [docs/deployment.md](docs/deployment.md) | Deployed addresses, attested assets, transaction hashes |
+| [docs/attester-key.md](docs/attester-key.md) | Attester key custody, loss/compromise response, rotation limits |
 | [docs/verifying.md](docs/verifying.md) | How a third party verifies an attestation end to end, without reading the source |
 | [docs/attestation-run.md](docs/attestation-run.md) | Every asset scanned, what each check returned, and what the run exposed about the scanner |
 | [docs/history.md](docs/history.md) | The observation history API: what is retained, for how long, and what an empty history means |
 | [docs/eval.md](docs/eval.md) | Labelled trap/legitimate set and current results |
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
+| [docs/debugging-a-verdict.md](docs/debugging-a-verdict.md) | Step-by-step workflow for investigating a surprising verdict |
 
 ## Status
 
