@@ -16,12 +16,14 @@ anyone should rely on the registry for value.
 
 ## What a compromised attestor can do today
 
-`docs/threat-model.md` does not exist yet. It is tracked separately (#30; the
-writer design refers to the same work as
-[#52](https://github.com/use-assay/Assay/issues/52)). The threat model that
-does exist is the single-admin one in
-[attestation-writer.md](attestation-writer.md#threat-model). The part a
-threshold has to answer is restated here so the schemes can be compared
+The actors, their capabilities and the admitted gaps are set out in
+[threat-model.md](threat-model.md) (#30; the writer design refers to the same
+work as [#52](https://github.com/use-assay/Assay/issues/52)). The relevant part
+— and the whole reason a threshold is on the roadmap — is attack class 1 there:
+a compromised attester can cause an **admission**, which is the only failure
+direction that puts funds at risk. The pipeline-document version of the same
+analysis is [attestation-writer.md](attestation-writer.md#threat-model). The
+part a threshold has to answer is restated here so the schemes can be compared
 against it.
 
 A holder of the admin key, honest or not, can:
