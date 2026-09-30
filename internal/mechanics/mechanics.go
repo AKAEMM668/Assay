@@ -14,10 +14,61 @@ import (
 	"sort"
 	"time"
 
+	"github.com/use-assay/assay/internal/assetlist"
 	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/sep1"
 	"github.com/use-assay/assay/internal/stellarexpert"
 )
+
+// TimeFormat is the one wire format for every time value Assay emits (issue
+// #52): UTC, RFC 3339, whole-second precision (RFC 3339 "Z" form, no
+// fractional digits). Precision is stated here and enforced by CanonicalTime's
+// marshaler; the attest package formats the hashed/report stream with the same
+// layout, so `scan` and `attestation` emit identical bytes for the same
+// instant instead of RFC3339Nano in one and truncated seconds in the other.
+const TimeFormat = "2006-01-02T15:04:05Z"
+
+// CanonicalTime is a time.Time that marshals through TimeFormat: one wire
+// format, UTC, whole-second precision, for every time value Assay emits
+// (issue #52). Non-UTC input is normalised to UTC, never rejected; fractional
+// seconds are accepted on input for forward compatibility but re-emission is
+// always whole-second, so a stored document round-trips to canonical bytes.
+type CanonicalTime time.Time
+
+// NewCanonicalTime normalises any instant into the canonical representation.
+func NewCanonicalTime(t time.Time) CanonicalTime {
+	return CanonicalTime(t.UTC().Truncate(time.Second))
+}
+
+// Time returns the underlying instant.
+func (c CanonicalTime) Time() time.Time { return time.Time(c) }
+
+// IsZero reports whether the instant is the zero time, mirroring
+// time.Time.IsZero for callers that treat a missing stamp as unknown.
+func (c CanonicalTime) IsZero() bool { return c.Time().IsZero() }
+
+// String renders the canonical wire format.
+func (c CanonicalTime) String() string { return c.Time().UTC().Format(TimeFormat) }
+
+// MarshalJSON renders the canonical string form.
+func (c CanonicalTime) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + c.String() + `"`), nil
+}
+
+// UnmarshalJSON parses the quoted format MarshalJSON emits.
+func (c *CanonicalTime) UnmarshalJSON(b []byte) error {
+	s := string(b)
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return fmt.Errorf("mechanics: time must be a quoted RFC 3339 string, got %s", s)
+	}
+	s = s[1 : len(s)-1]
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		return fmt.Errorf("mechanics: invalid RFC 3339 timestamp %q: %w", s, err)
+	}
+	*c = NewCanonicalTime(t)
+	return nil
+}
 
 // Asset identifies a classic Stellar asset.
 type Asset struct {
@@ -36,25 +87,18 @@ func (a Asset) String() string { return a.Code + "-" + a.Issuer }
 // no code path that renders someone else's data as an Assay conclusion.
 type Evidence struct {
 	Source string `json:"source"`
-	// URL is the location the claim is attributed to. It keeps its original
-	// per-path meaning so that no attestation already on chain moves: on a
-	// successful fetch it is the FINAL location, after redirects; on a failed
-	// fetch it is the REQUESTED location, because no final document existed.
-	// RequestedURL carries the other half.
-	URL string `json:"url"`
-	// RequestedURL is the SEP-1 well-known location derived from home_domain —
-	// the URL Assay asked for. It is recorded alongside URL so an auditor can
-	// see whether a claim came from the requested host or from somewhere a
-	// redirect moved it to, which URL alone cannot express. On a failed fetch
-	// it equals URL (the request never produced a final location).
+	URL    string `json:"url"`
+	Claim  string `json:"claim"`
+	// RetrievedAt is when this specific fact was observed from the source
+	// (or when the attempt was made, if the fetch failed).
 	//
-	// It is deliberately OUTSIDE the evidence_hash preimage, which renders only
-	// Source/URL/Claim: adding it must not change the hash of a report whose
-	// claim did not change, or every existing attestation would stop
-	// reproducing. A future encoding may bind it; that would be a version bump.
-	RequestedURL string    `json:"requested_url,omitempty"`
-	Claim        string    `json:"claim"`
-	RetrievedAt  time.Time `json:"retrieved_at"`
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// When a fetch fails, RetrievedAt carries the attempt time, Attempted is
+	// true, and Claim reads "not retrievable: <reason>". An absent retrieval
+	// time is never represented as a zero timestamp. See docs/timestamps.md.
+	RetrievedAt time.Time `json:"retrieved_at"`
 	// Attempted marks evidence whose RetrievedAt is the time the fetch was
 	// ATTEMPTED, not the time the source answered: the fetch failed, so there
 	// is no completion time to record. The Claim of such evidence always reads
@@ -63,6 +107,13 @@ type Evidence struct {
 	// and got nothing" — the same programmatic distinguishability rule the
 	// Undetermined flag follows for findings.
 	Attempted bool `json:"attempted"`
+	// Refused marks evidence whose failure is a host-policy refusal rather
+	// than an ordinary fetch failure. A refusal says the scanner declined to
+	// make the request at all; an ordinary failure says the request was made
+	// and did not complete. Both are attempts, but they are different facts
+	// and must be distinguishable by a program, not only by the wording of
+	// Claim.
+	Refused bool `json:"refused,omitempty"`
 }
 
 // Finding is one check's result.
@@ -118,10 +169,20 @@ type Subject struct {
 	// did not, and is reported verbatim rather than being smoothed over.
 	// A resolved Doc carries its own FetchedAt; TomlAttemptedAt is when the
 	// fetch was attempted, used for failure evidence where no Doc exists.
+	// TomlRefused reports that TomlErr is a host-policy refusal rather than an
+	// ordinary fetch failure, so a refusal can be recorded as one.
 	Toml            *sep1.Doc
 	TomlURL         string
 	TomlErr         string
+	TomlRefused     bool
 	TomlAttemptedAt time.Time
+
+	// TomlLinked is the result of following the per-currency TOML links the
+	// resolved Doc delegates to, bounded by sep1.MaxLinkedDocuments and subject
+	// to the same host policy as the main fetch. It is nil when there were no
+	// links to follow, which is how "nothing was delegated" stays distinct
+	// from "a linked document was read and did not match".
+	TomlLinked *sep1.LinkedResolution
 
 	// Directory and Blocked are the curated reputation signals. Each has an Err
 	// field for the same reason TomlErr exists: a nil entry means "not listed"
@@ -144,12 +205,27 @@ type Subject struct {
 	BlockedFetchedAt     time.Time
 	BlockedAttemptedAt   time.Time
 
+	// AssetLists are the SEP-0042 curated lists consulted for this asset, one
+	// entry per configured list, in configuration order. Empty when no list is
+	// configured — which is the default, because shipping a default list would
+	// both hard-code someone's curation as authoritative and add evidence to
+	// every report.
+	//
+	// They are kept as a slice rather than folded into one verdict because
+	// each list is a different provider: presence on list A and absence from
+	// list B are two statements by two sources, and merging them would assert a
+	// determination neither made. A list that could not be read records Err and
+	// carries no absence, so an unreachable source cannot render as silence.
+	AssetLists []AssetListSignal
+
 	// Holder is the account ID of a specific holder when per-trustline analysis
 	// was requested. Empty when no holder was specified; the trustline check is
 	// not run in that case and behavior is identical to a no-holder scan.
 	Holder string
 	// HolderTrustline is the holder's balance entry for this asset. Populated
 	// when Holder is non-empty and the holder holds the asset.
+	// HolderTrustlineErr records why it was not available.
+	// HolderTrustline    *horizon.TrustlineBalance
 	// HolderTrustlineErr records why it was not available.
 	HolderTrustline    *horizon.TrustlineBalance
 	HolderTrustlineErr string
@@ -163,9 +239,116 @@ type Subject struct {
 	// ScannedAt is when the scan started. It is the report-level timestamp:
 	// evidence carries the time of the source it came from, and the report
 	// carries the time the subject assembly began.
+	//
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// Because data sources are fetched sequentially over an outer context
+	// timeout of up to 30 seconds, ScannedAt is an approximation across the
+	// sequential fetch window; individual facts may have been retrieved up
+	// to 30 seconds after ScannedAt. See docs/timestamps.md.
 	ScannedAt time.Time
+	// FetchedAt is a legacy alias for ScannedAt, retained for backwards
+	// compatibility with earlier callers. It is populated with the same
+	// scan start timestamp.
 	FetchedAt time.Time
+	// Network is the Stellar network every fact in this Subject was read
+	// from, named by the full network passphrase. It is a scan-level fact
+	// for the same reason ScannedAt is: individual checks cannot know it
+	// (checks do no I/O), yet an attestation must commit to which ledger its
+	// facts came from, because the same CODE-ISSUER can exist on two networks
+	// with different flags (#41). An empty Network means the scan never
+	// declared one — reports written before network binding keep hashing
+	// exactly as they did, and preimage versioning handles the rest.
+	Network horizon.Network
 }
+
+// AssetListSignal is one configured SEP-0042 list's result for the asset under
+// scan, attributed to the list that published it: its own name, its own URL and
+// its own retrieval time, never merged with another source's answer.
+//
+// It is evidence only. SEP-0042 states that "inclusion of any particular asset
+// in a list should not be considered as endorsement or recommendation of any
+// kind", so presence never moves severity in either direction — see
+// docs/severity-model.md: severity is capability-only, and absence from a list
+// is not an observation at all.
+type AssetListSignal struct {
+	// Name and Provider are the list's own self-description, and identify the
+	// source in the report. Both are empty when the list could not be read, in
+	// which case only URL identifies it.
+	Name     string
+	Provider string
+	// URL is where the list was fetched from, so the reader can re-fetch
+	// exactly what was read.
+	URL string
+	// Version and Network are recorded as published and are not checked
+	// against the ledger.
+	Version string
+	Network string
+
+	// Entry is the list's own entry for this asset, populated only when a match
+	// was found in a list that was actually read.
+	Entry *assetlist.Asset
+	// Listed is meaningful only when Err is empty: a list that could not be
+	// read gave no answer, and no answer must never render as absence.
+	Listed bool
+
+	// FetchedAt is when this list was retrieved — the time of the fetch, not
+	// the time of the scan.
+	FetchedAt time.Time
+	// AttemptedAt is when the list was asked. Always set, so failure evidence
+	// always has a time to carry.
+	AttemptedAt time.Time
+	// Err records why the list could not be read, verbatim. Empty means it was
+	// read.
+	Err string
+}
+
+// AssetListSignal is one configured SEP-0042 list's result for the asset under
+// scan, attributed to the list that published it: its own name, its own URL and
+// its own retrieval time, never merged with another source's answer.
+//
+// It is evidence only. SEP-0042 states that "inclusion of any particular asset
+// in a list should not be considered as endorsement or recommendation of any
+// kind", so presence never moves severity in either direction — see
+// docs/severity-model.md: severity is capability-only, and absence from a list
+// is not an observation at all.
+type AssetListSignal struct {
+	// Name and Provider are the list's own self-description, and identify the
+	// source in the report. Both are empty when the list could not be read, in
+	// which case only URL identifies it.
+	Name     string
+	Provider string
+	// URL is where the list was fetched from, so the reader can re-fetch
+	// exactly what was read.
+	URL string
+	// Version and Network are recorded as published and are not checked
+	// against the ledger.
+	Version string
+	Network string
+
+	// Entry is the list's own entry for this asset, populated only when a match
+	// was found in a list that was actually read.
+	Entry *assetlist.Asset
+	// Listed is meaningful only when Err is empty: a list that could not be
+	// read gave no answer, and no answer must never render as absence.
+	Listed bool
+
+	// FetchedAt is when this list was retrieved — the time of the fetch, not
+	// the time of the scan.
+	FetchedAt time.Time
+	// AttemptedAt is when the list was asked. Always set, so failure evidence
+	// always has a time to carry.
+	AttemptedAt time.Time
+	// Err records why the list could not be read, verbatim. Empty means it was
+	// read.
+	Err string
+}
+
+// ReportSchemaVersion is the current value Report.SchemaVersion marshals as
+// (issue #44). Bump it on any breaking change to the report JSON shape; see
+// the compatibility rule on the field.
+const ReportSchemaVersion = 1
 
 // HomeDomain returns the issuer's advertised home_domain, if any.
 func (s *Subject) HomeDomain() string {
@@ -188,6 +371,16 @@ type Check interface {
 
 // Report is the aggregated result of running every check over one asset.
 type Report struct {
+	// SchemaVersion is the version of the report JSON shape (issue #44).
+	// Consumers read it to know which shape they are parsing — the /api/v1 in
+	// the URL is a route namespace, not a payload contract.
+	//
+	// Compatibility rule: ADDITIVE changes (a new optional field, a new enum
+	// member consumers must already tolerate) do NOT bump this value.
+	// REMOVALS, renames, type changes, and semantic changes to an existing
+	// field DO bump it. The current value is 1.
+	SchemaVersion int `json:"schema_version"`
+
 	Asset Asset `json:"asset"`
 
 	// Severity is the final level: the capability base, raised by any
@@ -203,6 +396,21 @@ type Report struct {
 	// Accountability is reported alongside severity, never folded into it.
 	Accountability Accountability `json:"accountability"`
 
+	// State is the overall verdict state of the report:
+	//   - "valid": a fresh, complete verdict.
+	//   - "unknown": a check could not conclude (undetermined or unevaluated).
+	//   - "stale": the verdict was complete when made, but is older than the
+	//     freshness policy window.
+	State State `json:"state"`
+
+	// Stale reports whether this verdict is older than the policy window.
+	// Kept distinct from Undetermined: a stale report was complete when made,
+	// whereas an undetermined report was never complete.
+	Stale bool `json:"stale"`
+
+	// StaleReason explains why the report is considered stale, if set.
+	StaleReason string `json:"stale_reason,omitempty"`
+
 	// Undetermined reports that at least one check could not complete because
 	// a source was unreachable, so this report is a partial answer.
 	//
@@ -215,6 +423,12 @@ type Report struct {
 	// UndeterminedChecks names the checks that could not complete, so a
 	// consumer can see which axis is missing rather than only that one is.
 	UndeterminedChecks []string `json:"undetermined_checks"`
+
+	// Network is the Stellar network the facts were read from, named by the
+	// full network passphrase. It is bound into the evidence preimage from v3
+	// on, so an attestation proves which ledger it describes; empty means the
+	// scan predates network binding and the report keeps its earlier encoding.
+	Network horizon.Network `json:"network,omitempty"`
 
 	// CheckSet is the sorted IDs of the checks the engine that produced this
 	// report actually ran. It is what makes a suppressed check — one removed
@@ -230,11 +444,32 @@ type Report struct {
 	// "complete".
 	CheckSet []string `json:"checks,omitempty"`
 
+	// ScannerBound opts this report into the v3 preimage encoding, which
+	// adds a `scanner` line naming the code that produced the report
+	// (issue #40). It is a deliberate opt-in flag rather than automatic so
+	// the encoding stays a property of the report: v1/v2 bytes are unchanged
+	// for every report that does not set it, which is what keeps the ten
+	// attestations already on chain reproducible. The identity itself is
+	// attest.ScannerIdentity (the module version); the flag only decides
+	// whether the hashed bytes name it. Serialized so a report document can
+	// carry the fact that it was produced under identity binding.
+	ScannerBound bool `json:"scanner_bound,omitempty"`
+
 	Mechanics     Mechanic   `json:"-"`
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
 	Evidence      []Evidence `json:"evidence"`
-	ScannedAt     time.Time  `json:"scanned_at"`
+	// ScannedAt is when the scan run started (the Subject.ScannedAt timestamp).
+	// It is the report-level timestamp.
+	//
+	// Clock source: scanner host wall clock (time.Now().UTC()).
+	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
+	//
+	// Because individual sources are fetched sequentially over an outer context
+	// timeout of up to 30 seconds, ScannedAt is an approximation across the
+	// sequential fetch window; individual Evidence items carry their own
+	// RetrievedAt completion times. See docs/timestamps.md.
+	ScannedAt time.Time `json:"scanned_at"`
 }
 
 // Engine runs a set of checks over a Subject.
@@ -278,10 +513,15 @@ func (e *Engine) CheckIDs() []string {
 //   - Accountability is taken from whichever check establishes it and is not
 //     permitted to influence either severity.
 func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
+	scannedAt := s.ScannedAt
+	if scannedAt.IsZero() && !s.FetchedAt.IsZero() {
+		scannedAt = s.FetchedAt
+	}
 	rep := &Report{
+		SchemaVersion:      ReportSchemaVersion,
 		Asset:              s.Asset,
 		Accountability:     AccountabilityUnknown,
-		ScannedAt:          s.ScannedAt,
+		ScannedAt:          CanonicalTime(scannedAt),
 		CheckSet:           e.CheckIDs(),
 		Findings:           []Finding{},
 		Evidence:           []Evidence{},
@@ -338,6 +578,12 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	}
 	rep.Escalated = rep.Severity > rep.Base
 	rep.MechanicNames = rep.Mechanics.Names()
+
+	if rep.Undetermined || rep.Base == Unevaluated || rep.Severity == Unevaluated {
+		rep.State = StateUnknown
+	} else {
+		rep.State = StateValid
+	}
 
 	sort.SliceStable(rep.Findings, func(i, j int) bool {
 		return rep.Findings[i].Severity > rep.Findings[j].Severity
