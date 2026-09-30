@@ -60,6 +60,107 @@ by reading the constructor argument from each deploy transaction:
 | `CCMA2SW23WUWTJGSC2MTUZVYWROMVTT42NLPTBCOAHGM632KEMNL5N3G` | duplicate, **unused** — nothing in the repo refers to it | `ca40172e…` (identical) | `CBK4FBIH…` |
 | `CANO57JRGTATHGLM26TWYPIXERSPVI5R52H33K7ZUJGGOEOVVZA44W3U` | **superseded, do not use** — admits critical-by-reputation assets ([#26](https://github.com/use-assay/Assay/issues/26)) | `d1683a1e…` (capability mask only) | `CBK4FBIH…` |
 
+## Does the source still build what is deployed?
+
+**Short answer: it cannot be verified today, and the reason is
+[#127](https://github.com/use-assay/Assay/issues/127), not the source.** The
+build is deterministic; the compiler is not pinned, so "the committed source"
+does not determine the bytes. What follows is the measurement rather than a
+conclusion drawn from one.
+
+The `Wasm hash` rows above are a record of what was deployed. Whether the
+source in this repository still produces them is a separate claim, and until
+it is checked they are an unverified record.
+
+### What was measured
+
+Three builds of `assay-safety-registry` from the same commit, each after
+`cargo clean`, the third from a different checkout path with a cold cargo
+cache:
+
+| Build | Toolchain | `sha256sum` of the built wasm |
+| --- | --- | --- |
+| recorded 2026-08-15 | stellar 27.1.0, rustc unknown (never recorded) | `c4105b91b3ceae95b5a225c55bc6981b3dcf71d07fdd0ee5c79a21d25edd301b` |
+| measured, same checkout | stellar 27.1.0, rustc 1.98.1 | `60d482546df4d1973f7d4b5d9ff5b413a974ba16afea1cf4851fe32fe0d6e745` |
+| measured, other checkout path | stellar 27.1.0, rustc 1.98.1 | `60d482546df4d1973f7d4b5d9ff5b413a974ba16afea1cf4851fe32fe0d6e745` |
+| measured, different compiler | stellar 27.1.0, **rustc 1.95.0** | `12dbf6b9d29c2d1109523007b82392b91f232ca16cd1a2a8394b90d6c54425f6` |
+
+Two things follow, and they are separate findings.
+
+**The build is deterministic.** The same source under the same toolchain
+produces byte-identical wasm every time, including from a different checkout
+path with no build cache. Whatever the CLI and the compiler embed in the
+output, it is not a timestamp, a path, or anything else that varies between
+runs.
+
+**The compiler version alone changes the bytes.** Identical source, identical
+`Cargo.lock`, identical `stellar` CLI 27.1.0, identical target — rustc 1.98.1
+and rustc 1.95.0 produce two different hashes. So byte-reproducibility across
+machines is not a property this repository currently has, and cannot have
+until the channel is fixed. `assay-contracts/rust-toolchain.toml` does not
+exist; `rustup` selects whatever channel is installed, so two people running
+`make build-contract` are running two different builds.
+
+Neither measured hash equals the recorded one. **That is not evidence that the
+source has drifted.** It is the expected consequence of an unpinned toolchain,
+and it cuts both ways: today nobody can produce the recorded hash, and equally
+nobody can rule out that they would. Until #127 lands, the recorded hashes
+cannot be confirmed or refuted by anyone, and a matching hash found by
+accident would be luck rather than verification.
+
+For the gate the same holds: recorded `ca40172ec8ebc259e7e21429748b2bd7cafe467fa3005d849d81d16938e8987c`,
+built here `9bd4a4b6a5e71e6c201eb633218c65dfb5dc0209dac6a0d5471b0228a4200a00`.
+
+### Checking it
+
+```sh
+make verify-wasm          # or: scripts/verify-wasm-source.sh
+```
+
+The script builds each contract from the committed source and compares the
+result to the hashes in this file. It builds into a temporary directory, so it
+never disturbs `assay-contracts/out/` or the artifact a deploy would upload,
+and it never edits this document, changes a recorded hash, or submits a
+transaction. It reports one of four outcomes per contract and exits 0 only
+when every recorded hash is reproduced:
+
+| Outcome | Meaning | Exit |
+| --- | --- | --- |
+| `verified` | The fresh build hashes to the recorded value. | 0 |
+| `mismatch` | It does not. Both values are printed, and it is never tolerated. | 1 |
+| `unpinned` | `rust-toolchain.toml` is missing, so the build cannot be compared. | 2 |
+| `unverifiable` | The `stellar` CLI is missing or is not the recorded 27.1.0, or the build failed. | 2 |
+
+Exit 2 never means "verified" and never means "safe" — it means the run could
+not answer the question, so a run with any `unpinned` or `unverifiable`
+contract never exits 0. **Today it exits 2, and that is the correct answer.**
+The moment #127 adds the pin this becomes the check it was written to be; the
+`unpinned` branch is not a workaround, it is the absence of a verdict.
+
+### What the recorded hashes are valid against
+
+| Component | Recorded | Confidence |
+| --- | --- | --- |
+| `stellar` CLI | 27.1.0 | Recorded and reproducible |
+| Rust target | `wasm32v1-none` | Recorded and reproducible |
+| `soroban-sdk` | 27.0.5 | Recorded; pinned by `Cargo.lock` |
+| Rust compiler | **not recorded** | **Unpinned — see #127** |
+
+The compiler row is the gap. One constraint worth recording for whoever
+closes #127: `soroban-sdk` 27.0.5 requires rustc 1.91.0 or newer, while
+`stellar` CLI 27.1.0 rejects anything outside 1.81, 1.82, 1.83 and 1.91.0 — and
+rejects 1.91.0 itself, so 1.90.0 and 1.91.0 both fail, one for being too old
+and one for the CLI's version check. A pin has to be a channel the CLI
+accepts, not merely one the SDK allows.
+
+### What this does not check
+
+The deployed bytes and this repository's source being *correct* is a
+different question, and is not answered here. Nor does it check that the
+registry still holds the attestations this document records — that is
+`scripts/check-deployment.sh`, which compares the document against the chain
+rather than against this repository.
+
 ## Attested assets
 
 Ten mainnet assets, spanning the severity range. Every number below was
@@ -346,6 +447,62 @@ stellar contract extend --id <CONTRACT_ID> --key-xdr "$KEY" --durability persist
   --ledgers-to-extend 3110399 --source-account assay-attester --network testnet
 ```
 
+## Checking for drift
+
+The tables in this file are the record of what is deployed, and they have
+drifted before: the docs named a superseded gate after the redeploy, and an
+unexplained duplicate instance existed before anything recorded it. Drift is
+silent, because a stale table reads exactly like a correct one.
+
+`scripts/check-deployment.sh` reads these tables and the network, and reports
+the difference:
+
+```sh
+scripts/check-deployment.sh                          # public testnet endpoint
+scripts/check-deployment.sh --rpc https://… --timeout 30
+ASSAY_RPC_URL=https://… ASSAY_RPC_TIMEOUT=30 scripts/check-deployment.sh
+scripts/check-deployment.sh --deployment /tmp/copy.md   # a copy, not this file
+```
+
+It checks the registry and gate addresses, the wasm hash of the registry and of
+all three gate instances, the registry each gate was constructed with, and the
+severity, flags and evidence hash of all ten attestations — 21 checks. Chain
+state is read with one `getLedgerEntries` call, as in
+[Entry lifetime](#entry-lifetime) above, so it needs no `stellar` CLI and no
+transaction: restoring an archived entry is what a transaction would do, and
+reading what is documented does not require it.
+
+Every check gets one of four outcomes, and only the first is a pass:
+
+| Outcome | Meaning |
+| --- | --- |
+| `valid` | The documented value matches chain state. |
+| `invalid` | A mismatch, reported with **both** values. For an address, "no contract at this address" is the on-chain value. |
+| `absent` | A documented attestation with no entry on chain — the expected outcome for an archived or withdrawn attestation. Distinct from a mismatch, and never a match. |
+| `unknown` | The RPC was unreachable, timed out, or answered with an error. Inconclusive by definition: neither a match nor a mismatch, and never a pass. |
+
+Exit codes follow `scripts/reproducibility.sh`: **0** if every check is valid,
+**1** if any is `invalid` or `absent` (drift, named, with both values), and
+**2** if no drift was found but at least one check is `unknown`, or the tables
+could not be parsed. Exit 2 never means "no drift" — it means the run could not
+answer the question, so a run with any `unknown` never exits 0. When drift and
+an `unknown` occur together the run exits 1 and reports the unknowns too: the
+finding is the more important information.
+
+The script only reads. It never edits this file and never submits a
+transaction; fixing drift is a decision for whoever owns the deployment.
+
+[`.github/workflows/check-deployment.yml`](../.github/workflows/check-deployment.yml)
+runs it weekly and on demand. It is deliberately not on the PR path, for the
+reason given in [CONTRIBUTING.md](../CONTRIBUTING.md#the-reproducibility-job): a
+change that touches no deployment state would fail here for reasons unrelated
+to itself.
+
+**This checks the document against the chain, not the chain against the
+source.** Whether the recorded wasm hashes come from the code in this
+repository is [#93](https://github.com/use-assay/Assay/issues/93), which is
+still open and needs a reproducible build rather than a ledger read.
+
 ## Redeploying
 
 A rebuilt wasm only reproduces the recorded hashes if it comes from the same
@@ -401,7 +558,10 @@ hand-written severity reach the contract.
 - **Not mainnet, and not a candidate for it.** The list below is why.
 - **One key can write anything.** The admin is a single ed25519 account whose
   seed lives on one machine. Anyone holding it can attest any severity for any
-  asset. A real deployment wants a threshold of independent attesters;
+  asset. Custody, backup, loss and compromise response, and why rotation
+  currently means redeploy are documented in
+  [attester-key.md](attester-key.md). A real deployment wants a threshold of
+  independent attesters;
   [multi-attestor.md](multi-attestor.md) compares the options.
 - **10 attested assets.** Everything else on the network reads as `None`. That is the
   correct answer — unknown, not safe — but it means the registry is not useful

@@ -314,6 +314,55 @@ fn attest_rejects_unauthorized_caller() {
     assert!(err.is_err());
 }
 
+/// Verifies host behavior for archived persistent entries. An archived entry
+/// is one whose TTL has expired (live_until < current ledger sequence).
+/// Per CAP-0066 / Protocol 23, the host automatically restores archived entries
+/// when they are accessed during a transaction (including simulation). The
+/// restored entry receives a fresh TTL (current_sequence + min_persistent_ttl - 1).
+/// This test documents the actual behavior: archived entries return the data
+/// (Some(Safety)) with the original attested_at timestamp, making them
+/// distinguishable from never-attested entries (which return None).
+#[test]
+fn archived_entry_auto_restored_and_readable() {
+    let (env, client, _) = setup();
+    let asset = Address::generate(&env);
+
+    // Write an attestation at ledger 0 (default sequence)
+    env.ledger().set_timestamp(1_000);
+    client.attest(&asset, &SEVERITY_CLEAR, &0, &hash(&env));
+
+    // Verify it's readable initially
+    let initial = client.get_safety(&asset);
+    assert!(
+        initial.is_some(),
+        "entry should be readable before archival"
+    );
+    let original_attested_at = initial.unwrap().attested_at;
+
+    // Default min_persistent_entry_ttl is 4096, so live_until = 4095.
+    // Advance sequence to 4096 to expire the entry.
+    env.ledger().set_sequence_number(4096);
+
+    // Read the archived entry via contract function.
+    // In test mode with soroban-sdk 27.0.5, the host auto-restores the entry
+    // and extends its TTL. The original attested_at is preserved.
+    let archived = client.get_safety(&asset);
+
+    // Archived entries are distinguishable from never-attested:
+    // - Never attested: get_safety returns None
+    // - Archived: get_safety returns Some(Safety) with original attested_at
+    assert!(
+        archived.is_some(),
+        "archived entry should be auto-restored and readable"
+    );
+    assert_eq!(
+        archived.unwrap().attested_at,
+        original_attested_at,
+        "attested_at preserved after restoration"
+    );
+
+    // The entry now has a fresh TTL (live_until = 4096 + 4095 = 8191)
+    // This is verified by the test snapshot.
 // ---------------------------------------------------------------------------
 // Revocation (#86)
 // ---------------------------------------------------------------------------

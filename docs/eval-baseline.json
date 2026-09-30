@@ -1,6 +1,6 @@
 {
   "version": "v0.1.0",
-  "generated_at": "2026-09-26T12:53:10.316388736Z",
+  "generated_at": "2026-09-29T14:38:45.664010184Z",
   "subjects": [
     {
       "dir": "aqua-clear-verified",
@@ -207,6 +207,80 @@
           "source": "stellar.expert/blocked-domains",
           "url": "https://api.stellar.expert/explorer/directory/blocked-domains/fchain.io",
           "claim": "domain \"fchain.io\" blocked=false"
+        }
+      ]
+    },
+    {
+      "dir": "usdz-clawback-regulated",
+      "asset": "USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+      "severity": "high",
+      "base_severity": "high",
+      "escalated": false,
+      "undetermined": false,
+      "mechanics": [
+        "auth_revocable",
+        "auth_clawback_enabled"
+      ],
+      "accountability": "verified",
+      "checks": [
+        "capability",
+        "mutability",
+        "reputation",
+        "sep1-domain"
+      ],
+      "findings": [
+        {
+          "check": "capability",
+          "severity": "high",
+          "escalation": false,
+          "undetermined": false,
+          "mechanics": [
+            "auth_revocable",
+            "auth_clawback_enabled"
+          ]
+        },
+        {
+          "check": "mutability",
+          "severity": "clear",
+          "escalation": false,
+          "undetermined": false,
+          "mechanics": null
+        },
+        {
+          "check": "sep1-domain",
+          "severity": "clear",
+          "escalation": false,
+          "undetermined": false,
+          "mechanics": null
+        },
+        {
+          "check": "reputation",
+          "severity": "clear",
+          "escalation": true,
+          "undetermined": false,
+          "mechanics": null
+        }
+      ],
+      "evidence": [
+        {
+          "source": "horizon",
+          "url": "https://horizon.stellar.org/assets?asset_code=USDZ\u0026asset_issuer=GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+          "claim": "issuer flags: auth_required=false auth_revocable=true auth_immutable=false auth_clawback_enabled=true"
+        },
+        {
+          "source": "stellar.toml",
+          "url": "https://zeam.money/.well-known/stellar.toml",
+          "claim": "CURRENCIES claims USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR"
+        },
+        {
+          "source": "stellar.expert/directory",
+          "url": "https://api.stellar.expert/explorer/directory/GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR",
+          "claim": "listed as \"Zeam.Money\" (domain \"zeam.money\", tags: issuer)"
+        },
+        {
+          "source": "stellar.expert/blocked-domains",
+          "url": "https://api.stellar.expert/explorer/directory/blocked-domains/zeam.money",
+          "claim": "domain \"zeam.money\" blocked=false"
         }
       ]
     },

@@ -203,7 +203,8 @@ Stated plainly, because an eval that hides its gaps is marketing.
 
 ## Adding a subject
 
-1. Capture fixtures for the asset and record provenance.
+1. Capture fixtures for the asset and record provenance, following
+   [Capturing a fixture](adding-a-check.md#capturing-a-fixture).
 2. Add a case to `TestEval` with the expected base, final, escalation, and
    accountability — and a `why` string stating what the case proves. The `why`
    is printed on failure, so a future maintainer learns what they broke.

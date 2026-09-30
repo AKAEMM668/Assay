@@ -12,8 +12,8 @@ CONTRACT_ID ?= CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73
 
 .PHONY: all build test cover lint fmt vet run clean \
 	contract-test contract-lint contract-build \
-	build-contract deploy-testnet attest read verify-gate \
-	eval-record eval-compare refresh-fixture
+	build-contract deploy-testnet attest read verify-gate verify-wasm \
+	eval-record eval-compare
 
 all: build
 
@@ -61,6 +61,20 @@ build-contract:
 	stellar contract build --manifest-path $(CONTRACTS)/Cargo.toml \
 		--package assay-safety-registry --out-dir $(CONTRACTS)/out
 
+# verify-wasm rebuilds each contract from the committed source and checks the
+# result against the wasm hashes recorded in docs/deployment.md. It builds into
+# a temporary directory, so it never disturbs the artifact deploy-testnet would
+# upload, and it never edits the document or submits a transaction.
+#
+# It exits 0 only when every recorded hash is reproduced. Until
+# assay-contracts/rust-toolchain.toml exists (#127) the toolchain is whatever
+# rustup has installed, which does not determine the bytes, so the run reports
+# UNVERIFIABLE and exits 2. That is the honest answer, not a failure of the
+# source. See docs/deployment.md ("Does the source still build what is
+# deployed?").
+verify-wasm:
+	./scripts/verify-wasm-source.sh
+
 deploy-testnet: build-contract
 	stellar contract deploy --wasm $(WASM) \
 		--source-account $(SOURCE) --network $(NETWORK)
@@ -106,6 +120,9 @@ read:
 verify-gate:
 	@test -n "$(BASE)" || { echo 'usage: make verify-gate BASE=<sha-or-ref> HEAD=<sha-or-ref>'; exit 2; }
 	./scripts/merge-gate.sh "$(BASE)" "$(HEAD)"
+
+test-gate:
+	bash ./scripts/test-merge-gate.sh
 
 # Records the labelled corpus's classification, per subject and per check.
 # Commit the result when the classifier's output is intended to change; it is
