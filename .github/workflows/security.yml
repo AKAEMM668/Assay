@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # actions/checkout@v5.0.0
-      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       # Same rationale as ci.yml: pinned to the module's own Go version
       # rather than `stable`, so the scan matches the toolchain the code is

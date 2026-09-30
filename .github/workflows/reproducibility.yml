@@ -30,7 +30,7 @@ jobs:
     # Ten live scans at ~5-15s each, plus retries on transient errors.
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # Pinned to the module's own version, as in ci.yml: when `stable`
       # moved to a newer Go than golangci-lint was built with, every check

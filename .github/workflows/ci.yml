@@ -13,7 +13,7 @@ jobs:
     name: Go
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       # Pinned to the module's own version rather than `stable`. When
       # `stable` moved to Go 1.27, golangci-lint v2.12.2 (built with 1.26)
@@ -98,7 +98,7 @@ jobs:
       matrix:
         go-version: ["1.22.x", "1.27.x"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - uses: actions/setup-go@v6
         with:
@@ -114,7 +114,7 @@ jobs:
     name: golangci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       # Pinned to the module's own version rather than `stable`. When
       # `stable` moved to Go 1.27, golangci-lint v2.12.2 (built with 1.26)
       # panicked type-checking the newer standard library, and this check
@@ -131,7 +131,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
       - name: lint shell scripts
         run: find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0 | xargs -0 shellcheck -S warning
 
@@ -142,7 +142,7 @@ jobs:
       run:
         working-directory: assay-contracts
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
 
       - name: rust toolchain
         run: rustup component add rustfmt clippy
@@ -177,7 +177,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
 
