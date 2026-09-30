@@ -378,6 +378,28 @@ per use class.
 `is_safe` re-checks it anyway. A gate should not have to assume the writer was
 correct.
 
+### Revocation removes the entry
+
+`revoke` withdraws an attestation. It is the admin-only counterpart to `attest`:
+after it, `get_safety` returns `None` and both gate helpers fail closed. Until
+now the only remedy for a wrong attestation was to overwrite it, which asserts a
+new claim rather than retracting one; revocation retracts.
+
+**Revoking an asset with no live attestation returns `Error::NotAttested`.** It
+is not a silent no-op: an operator who revokes twice, or revokes something that
+was never attested, learns the entry was already absent rather than getting a
+false success.
+
+**Revoked and never-attested are deliberately indistinguishable.** `revoke`
+deletes the key and keeps no tombstone, so both states return `None` and both
+reject a further `revoke` with `NotAttested`. A consumer cannot tell a withdrawn
+claim from one that was never made, and this contract does not pretend
+otherwise. Distinguishing them would mean storing a marker, which is the
+history/audit question ([#92](https://github.com/use-assay/Assay/issues/92)), not
+revocation.
+
+Revocation publishes no event; the event schema is still attestation writes only.
+
 ## Using it
 
 ```rust

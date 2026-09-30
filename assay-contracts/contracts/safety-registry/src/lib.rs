@@ -541,10 +541,20 @@ impl SafetyRegistry {
     ///
     /// This is a retraction, not a new claim. Overwriting a wrong attestation
     /// with a higher severity asserts something the scanner never concluded;
-    /// revoking says only that the previous claim no longer stands.
+    /// revoking says only that the previous claim no longer stands. Until
+    /// revocation existed, overwriting was the only remedy for a wrong
+    /// attestation — which asserted a new claim rather than retracting one.
     ///
-    /// Revoking an asset with no attestation returns [`Error::NotAttested`]
-    /// and changes nothing. The asset can be attested again afterwards.
+    /// Only the admin may revoke, mirroring `attest`. Revoking an asset with no
+    /// attestation returns [`Error::NotAttested`] and changes nothing, so an
+    /// operator who aims at the wrong address learns the entry was absent
+    /// rather than being told the revocation succeeded. The asset can be
+    /// attested again afterwards.
+    ///
+    /// Revoked and never-attested are deliberately indistinguishable to
+    /// `get_safety`: both return `None`. The contract keeps no tombstone, so it
+    /// does not claim to tell them apart. The `Revoked` event is the only place
+    /// the two differ off-chain. See `docs/contract-interface.md`.
     pub fn revoke(env: Env, asset: Address) -> Result<(), Error> {
         let admin: Address = env
             .storage()
