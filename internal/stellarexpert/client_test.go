@@ -88,22 +88,26 @@ func serveSequence(t *testing.T, statuses []int, bodies []string) *stellarexpert
 // and surfaced downstream as the attributed claim `listed as ""` — a statement
 // the directory never made.
 func TestEmptyDirectoryResponseIsNotAListing(t *testing.T) {
-	entry, err := serve(t, http.StatusOK, bodyUnlisted).
+	answer, err := serve(t, http.StatusOK, bodyUnlisted).
 		Directory(context.Background(), "GBBS25EGYQPGEZCGCFBKG4OAGFXU6DSOQBGTHELLJT3HZXZJ34HWS6XV")
 	if err != nil {
 		t.Fatalf("an empty entry is a normal answer, not an error: %v", err)
 	}
-	if entry != nil {
-		t.Fatalf("empty response reported as a listing: %+v", entry)
+	if answer.Value != nil {
+		t.Fatalf("empty response reported as a listing: %+v", answer.Value)
+	}
+	if answer.FetchedAt.IsZero() {
+		t.Error("an answer that arrived records no fetch time")
 	}
 }
 
 func TestRealDirectoryEntryIsReturned(t *testing.T) {
-	entry, err := serve(t, http.StatusOK, bodyListed).
+	answer, err := serve(t, http.StatusOK, bodyListed).
 		Directory(context.Background(), "GAROH4EV3WVVTRQKEY43GZK3XSRBEYETRVZ7SVG5LHWOAANSMCTJBB3U")
 	if err != nil {
 		t.Fatalf("Directory: %v", err)
 	}
+	entry := answer.Value
 	if entry == nil {
 		t.Fatal("a real entry was dropped")
 	}
@@ -116,13 +120,13 @@ func TestRealDirectoryEntryIsReturned(t *testing.T) {
 }
 
 func TestNotFoundIsNotAnError(t *testing.T) {
-	entry, err := serve(t, http.StatusNotFound, `{}`).
+	answer, err := serve(t, http.StatusNotFound, `{}`).
 		Directory(context.Background(), "GBBS25EGYQPGEZCGCFBKG4OAGFXU6DSOQBGTHELLJT3HZXZJ34HWS6XV")
 	if err != nil {
 		t.Fatalf("404 means not listed, which is a normal answer: %v", err)
 	}
-	if entry != nil {
-		t.Fatalf("404 reported as a listing: %+v", entry)
+	if answer.Value != nil {
+		t.Fatalf("404 reported as a listing: %+v", answer.Value)
 	}
 }
 
@@ -140,13 +144,17 @@ func TestOutageIsAnErrorNotAnAbsentEntry(t *testing.T) {
 }
 
 func TestBlockedDomainDecodes(t *testing.T) {
-	c := serve(t, http.StatusOK, `{"domain":"darkpool.digital","blocked":false}`)
-	b, err := c.BlockedDomain(context.Background(), "darkpool.digital")
+	answer, err := serve(t, http.StatusOK, `{"domain":"darkpool.digital","blocked":false}`).
+		BlockedDomain(context.Background(), "darkpool.digital")
 	if err != nil {
 		t.Fatalf("BlockedDomain: %v", err)
 	}
+	b := answer.Value
 	if b == nil || b.Domain != "darkpool.digital" || b.Blocked {
 		t.Fatalf("blocklist answer decoded wrongly: %+v", b)
+	}
+	if answer.FetchedAt.IsZero() {
+		t.Error("a blocklist answer records no fetch time")
 	}
 }
 
