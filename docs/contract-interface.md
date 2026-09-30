@@ -32,6 +32,7 @@ is designed (not yet built) in [attestation-writer.md](attestation-writer.md).
 ## ABI
 
 ```rust
+// What storage holds, returned by get_safety.
 pub struct Safety {
     pub severity: u32,             // 0..=4, capability-only
     pub flags: u32,                // mechanic bitset
@@ -39,21 +40,129 @@ pub struct Safety {
     pub attested_at: u64,          // ledger timestamp
 }
 
+// One element of an attest_many batch: the arguments of attest(), grouped.
+pub struct Attestation {
+    pub asset: Address,
+    pub severity: u32,
+    pub flags: u32,
+    pub evidence_hash: BytesN<32>,
+}
+
+/// The largest batch attest_many accepts. The cap is derived from the
+/// live transaction resource limits; see "attest_many" below.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 pub fn get_safety(env: Env, asset: Address) -> Option<Safety>;
 pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool;
 pub fn is_safe_masked(env: Env, asset: Address, forbidden_mask: u32, max_age_secs: u64) -> bool;
 pub fn attest(env: Env, asset: Address, severity: u32, flags: u32, evidence_hash: BytesN<32>) -> Result<(), Error>;
+pub fn attest_many(env: Env, attestations: Vec<Attestation>) -> Result<(), Error>;
 pub fn revoke(env: Env, asset: Address) -> Result<(), Error>;
 pub fn init(env: Env, admin: Address) -> Result<(), Error>;
 ```
 
+The `Vec<Attestation>` argument is confirmed against the built artifact rather
+than assumed: `stellar contract info interface` on the compiled wasm publishes
+`fn attest_many(env: soroban_sdk::Env, attestations: soroban_sdk::Vec<Attestation>)`
+with `Attestation` as a contracttype UDT, so a `Vec` of a `#[contracttype]`
+struct is a supported argument type in soroban-sdk 27.
+
 | Error | Code | Returned by |
 | --- | --- | --- |
 | `AlreadyInitialized` | 1 | `init` on an initialized contract |
-| `NotInitialized` | 2 | `attest`, `revoke` before `init` |
-| `InvalidSeverity` | 3 | `attest` with severity above 4 |
-| `InconsistentAttestation` | 4 | `attest` with the clawback bit below `SEVERITY_HIGH` |
+| `NotInitialized` | 2 | `attest`, `attest_many`, `revoke` before `init` |
+| `InvalidSeverity` | 3 | `attest`, `attest_many` with severity above 4 |
+| `InconsistentAttestation` | 4 | `attest`, `attest_many` with the clawback bit below `SEVERITY_HIGH` |
 | `NotAttested` | 5 | `revoke` for an asset with no attestation |
+| `BatchTooLarge` | 6 | `attest_many` with more than `MAX_BATCH_SIZE` elements |
+
+### `attest_many`: many attestations in one transaction
+
+`attest_many(attestations)` is `attest`, repeated. One transaction writes up to
+`MAX_BATCH_SIZE` attestations, which is what lets a re-attestation run cover a
+useful set of assets instead of one asset per ledger and per fee.
+
+Every element is written exactly as `attest` writes it — the same
+`DataKey::Safety(asset)` key, the same stored `Safety`, the same `Attested`
+event — and both entrypoints call the same validation function. A batch is
+**not** a lower bar:
+
+- `InvalidSeverity` and `InconsistentAttestation` are the same checks, on every
+  element. There is no batch path around the confiscation invariant.
+- `require_auth` on the admin is required, as for `attest`. An empty batch is
+  authorized too: who may call an entrypoint is a property of the entrypoint,
+  not of what it was handed.
+- Per-asset reads after a batch are identical to per-asset reads after the
+  equivalent single writes. The contract test
+  `batch_reads_match_single_write_path` asserts the stored value is equal, not
+  merely equivalent.
+
+#### All-or-nothing, not partial
+
+**A batch is applied whole or not at all.** Every element is validated before
+the first write, so a batch containing one bad element stores nothing, publishes
+nothing, and returns the same typed error the single-write path returns for that
+element. There is no state in which some assets of a batch were re-attested and
+others silently were not, and the tail is never truncated to make a partly-bad
+batch fit.
+
+This is stronger than the host gives for free, and the extra is worth stating
+precisely rather than overclaiming. Soroban already rolls the whole transaction
+back on failure, so a batch could not half-commit even with a write-as-you-go
+loop. What validating up front adds is (a) a failure that is *typed and
+deterministic* — an error a caller can branch on, rather than a resource failure
+from whichever write happened to be in flight — and (b) a failure that is cheap,
+because a batch whose last element is bad does not first pay to write every
+element before it.
+
+#### The cap, and why it is 50
+
+The bound is a network limit, not a round number. Read live on 2026-09-27 with
+`stellar network settings --network testnet` (protocol 28), and measured against
+the same enforcement the SDK applies in the tests:
+
+| Limit | Live network | A full 50-element batch | Used |
+| --- | --- | --- | --- |
+| **contract event bytes** | **16 384** | **10 000** | **61% — the binding limit** |
+| ledger entries written | 200 | 51 | 26% |
+| transaction footprint entries | 400 | 105 | 26% |
+| bytes written | 132 096 | 14 072 | 11% |
+| instructions | 400 000 000 | 3 275 513 | 0.8% |
+| memory | 41 943 040 | 514 609 | 1.2% |
+
+Each element publishes its own `Attested` event and one such event is exactly
+200 bytes, so the event budget admits **at most 81 elements** however frugal the
+writes are. That is the hard ceiling: a 100-element batch was measured failing
+with `contract events size bytes: 20000 > 16384`. 50 sits at 61% of that
+budget — room for the event schema to grow before the cap becomes wrong — and
+costs about a quarter of every other limit, including the write budget one would
+naturally have guessed was binding.
+
+Per-asset events are kept rather than collapsed into one batch-sized event for
+precisely this reason. A single event would raise the ceiling, but it would
+take away the property that an indexer subscribed to `("attest", asset)` sees
+every write to that asset without decoding batch bodies. A higher cap is worth
+less than that.
+
+`batch_size_bound_is_measured_and_holds_headroom` in the contract tests runs a
+full batch with the SDK's mainnet resource enforcement switched on (which
+`Env::default` enables), asserts it fits every limit, and pins the 200-byte
+per-event cost so the cap is re-derived rather than silently wrong if the event
+or the write path changes.
+
+#### Empty batches, and one timestamp per batch
+
+An empty batch succeeds and does nothing: no storage write, no event, and no
+instance TTL extension. That is the honest reading of all-or-nothing over zero
+elements, and it lets a pipeline pass whatever a scan produced without
+special-casing "nothing changed this round".
+
+Every element of one batch carries the same `attested_at`: the timestamp of the
+ledger the batch landed in. `attested_at` records when the write happened, not
+when each scan ran, and the elements of one call were written at the same
+instant. If the same asset appears twice in a batch, both are applied in order
+and both events are published, with the second write winning — exactly what two
+calls to `attest` would have done.
 
 ### `revoke`: withdrawing an attestation
 
@@ -143,6 +252,10 @@ happen.
 | `symbol_short!("attest")` | asset `Address` | `Map<Symbol, Val>` with keys `severity: u32`, `flags: u32`, `attested_at: u64` |
 | `symbol_short!("revoke")` | asset `Address` | `Map<Symbol, Val>` with key `revoked_at: u64` |
 
+`attest_many` publishes one such `attest` event per element, in batch order,
+with no batch-specific event or decoding path. A rejected batch publishes
+nothing at all.
+
 A successful `revoke` publishes the second row. A failed revoke (`NotAttested`,
 unauthorized) publishes nothing. The `revoke` event uses the same topic layout
 as `attest`, so an indexer subscribed by asset sees both the write and its
@@ -213,14 +326,43 @@ attested, stale, too severe, or internally inconsistent.
 The safe answer is the default, so a caller who gets the arguments wrong blocks
 rather than admits.
 
+### A gate reads both severity and the bitset
+
+A gate that copies this example has to check **both** axes. They are not
+redundant, and the reader who takes one for the other is looking at the bug
+that shipped in the example gate.
+
+Severity is a total order and answers *how bad*; the bitset answers *which
+power*. Reputation escalation raises `severity` and sets `blocklisted` and must
+never set a capability bit — capability bits describe what the issuer *can do*,
+and a scam listing is not a capability. So a mask over capability bits cannot
+see escalation, by construction, and a severity ceiling cannot tell a freeze
+from a confiscation.
+
+`DOGE-GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P` (the DOGE
+fixture in the eval corpus) is the concrete counter-example. It is attested at
+severity `4` (`SEVERITY_CRITICAL`) with flags `48`
+(`domain_unverified | blocklisted`) and **no capability bits at all**, because
+its issuer genuinely cannot freeze or confiscate. A gate masking only on
+`MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED` (`6`) computes `48 & 6 == 0` and
+admits a known scam. Only the severity ceiling refuses it.
+
+The numbers are spelled out because the failure is easy to describe and easy to
+miss: `48 & 6 == 0` is exactly zero, and a gate reading a truthful bitset is
+satisfied by it. [integrating.md](integrating.md) works the same case through
+both checks, and the example gate carries the note next to `MAX_SEVERITY`. The
+history of the fix is
+[#26](https://github.com/use-assay/Assay/issues/26).
+
 ### Staleness is the caller's policy
 
 `attested_at` is exposed and `max_age_secs` is a parameter rather than a
 contract constant. Assay does not silently serve stale safety, and it does not
 guess how fresh is fresh enough — a DEX listing gate and a large settlement
 have very different tolerances. `max_age_secs = 0` opts out explicitly.
-Recommended bands with reasoning, the re-attestation cadence, and consumer
-guidance are in [freshness.md](freshness.md).
+`attested_at` is the authoritative timestamp for on-chain freshness decisions
+(see [timestamps.md](timestamps.md)); recommended bands with reasoning, the
+re-attestation cadence, and consumer guidance are in [freshness.md](freshness.md).
 
 [freshness.md](freshness.md) is the guidance for picking a value: what changes
 under an attestation, how fast (measured, not guessed), and defensible windows
@@ -277,10 +419,33 @@ one line after `accountability`:
 checks	ID,ID,...        (the checks the engine ran, sorted)
 ```
 
+A report that also names its network is written as `assay-evidence-v3`, which
+adds one line after `checks` — or after `accountability` when no check set is
+bound:
+
+```
+network	PASSPHRASE      (the ledger the facts were read from)
+```
+
+`PASSPHRASE` is the full Stellar network passphrase, not a short name:
+`Public Global Stellar Network ; September 2015` for pubnet, `Test SDF Network
+; September 2015` for testnet. The passphrase is the one network identifier the
+ecosystem already agrees on, and the value is fixed by the protocol — it is not
+configuration.
+
 Reports produced before check-set binding carry no `checks` line and are still
 written as `v1`, so an attestation already on-chain keeps reproducing its hash.
 A verifier reads a report with no bound check set as *unknown*, never as
-complete.
+complete. The same rule covers the network: reports produced before network
+binding carry no `network` line and keep their earlier encoding (`v1` if no
+check set is bound, `v2` otherwise), so every attestation written before this
+change still reproduces its hash. The version line names the newest binding the
+report carries, and each version's rendering is cumulative — a v3 report with
+no bound check set carries the network line but not the checks line.
+
+The committed vectors `network-bound-pubnet` and `network-bound-testnet` in
+`internal/attest/testdata/vectors` are byte-identical except for the network
+line and hash differently, which is the property this encoding exists for.
 
 with one `evidence` line per attributed claim, sorted bytewise. Inside any
 field, `\` becomes `\\`, tab becomes `\t`, newline `\n`, carriage return `\r`.
@@ -295,6 +460,34 @@ Excluding them means a verifier can re-scan and reproduce the hash exactly. The
 cost is that the hash cannot distinguish a fresh confirmation from a stale one
 — which is precisely why `attested_at` is stored separately and `is_safe` takes
 `max_age_secs` against it.
+
+**`undetermined` is deliberately excluded, decided in
+[#43](https://github.com/use-assay/Assay/issues/43).** The reasoning:
+
+- An undetermined report can never be attested — `attest.FromReport` refuses it
+  with `ErrUndetermined` — so the flag is constant (`false`) across every
+  report that has a hash at all. A field that never varies commits nothing; it
+  would add a line that carries no information in any preimage a verifier will
+  ever compare.
+- The exclusion is safe only because the refusal exists, so the guarantee rests
+  on `FromReport` refusing, not on the encoding. `TestUndeterminedReportIsRefused`
+  and `TestCapabilityClearWithReputationDownIsNotAttestable` (both in
+  `internal/attest/attest_test.go`) pin that refusal; if it is ever weakened,
+  the encoding decision must be revisited, because a hash over attestable
+  reports only is sound exactly as long as undetermined reports stay
+  unattestable.
+- Degraded scans are already visible in the hash through a stronger channel:
+  an unreachable source emits a `not retrievable: …` evidence claim, which is
+  hashed like any other. Two scans of the same asset, one with a source outage
+  and one without, already produce different hashes and different evidence
+  sets — there is nothing the flag would add that the evidence lines do not
+  already carry. `docs/attestation-run.md` records the corresponding live
+  observation: an undetermined KALE report would have hashed differently, and
+  the attestation was refused.
+- The corollary is a verifier rule, not just an implementation note: **never
+  compare the hash of a report carrying `undetermined: true`.** Such a report
+  has no evidence_hash — `FromReport` produces none — and an independent
+  reimplementer must refuse it the same way.
 
 The version line is inside the hash, so a future encoding change cannot produce
 bytes a verifier would silently compare against v1.
@@ -320,6 +513,26 @@ The check-set binding is a v2 rather than an amendment to v1 deliberately: an
 attestation written under v1 omitted the check set entirely, and re-hashing it
 under a changed v1 format would break every existing attestation.
 
+### The preimage binds the network
+
+An asset code and issuer can exist on two networks with different flags, and
+Assay's attestations are currently written to testnet while scanning pubnet —
+so before the v3 encoding, a pubnet scan and a testnet scan of the same
+identifier produced indistinguishable preimages, and an attestation could not
+prove which ledger it describes.
+
+The v3 encoding closes that: the network passphrase is part of the preimage, so
+the same facts read from two ledgers hash differently. `scan.Scanner` resolves
+the network before any fetch — from the Horizon base URL when it is an
+SDF-operated host, cross-checked against an explicit `Network` declaration —
+and refuses to scan when neither can name it, or when the two contradict. A
+misconfigured attester therefore fails at scan time instead of publishing
+pubnet facts under a testnet contract.
+
+An undeterminable network is an error, never a default, for the same reason an
+unread flag is `Unevaluated` rather than `Clear`: a guessed network name in a
+hashed field is a false attestation waiting to be written.
+
 ## Not done yet
 
 - **Single admin.** One key can write or revoke any attestation. A production
@@ -327,11 +540,11 @@ under a changed v1 format would break every existing attestation.
   options are compared, with a recommendation, in
   [multi-attestor.md](multi-attestor.md).
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
-  issuer's flags change. Freshness is entirely the caller's problem, via
+  issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
-- **TTL is extended on write only.** `init`, `attest` and `revoke` extend the
-  contract instance and code to the network maximum, and `attest` extends the
-  attestation entry too. Reads extend nothing. An attestation nobody re-attests
+- **TTL is extended on write only.** `init`, `attest`, `attest_many` and
+  `revoke` extend the contract instance and code to the network maximum, and the
+  two write paths extend the attestation entries they write. Reads extend nothing. An attestation nobody re-attests
   is archived after roughly 180 days on current testnet parameters. It is then
   restored on the next access at the reader's expense, not lost. See
   [deployment.md](deployment.md#entry-lifetime). The live testnet deployment
