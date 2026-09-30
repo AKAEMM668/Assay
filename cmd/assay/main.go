@@ -35,6 +35,12 @@ func usage() {
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
+  assay serve [-addr]             serve the HTTP API and UI
+
+Every command that scans accepts:
+  -cache-directory-ttl D   reuse a curated directory answer for D (0 disables)
+  -cache-blocklist-ttl D   reuse a blocklist answer for D (0 disables)
+  -no-cache                re-fetch curated sources on every scan
   assay serve [-addr] [-history PATH]
                                   serve the HTTP API and UI
 
@@ -310,6 +316,12 @@ func runServe(args []string, log *slog.Logger) error {
 		return err
 	}
 
+	// The cache lives as long as the server process, which is where it earns
+	// its keep: repeated scans of the same issuer reuse an answer instead of
+	// re-reading a free service on every request.
+	srv := &http.Server{
+		Addr:              *addr,
+		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
 	srv := api.NewServer(log)
 	// The server is where a list configuration matters most: every scan it
 	// serves consults the same configured lists, attributed the same way, and

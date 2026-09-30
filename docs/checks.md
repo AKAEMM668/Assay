@@ -201,6 +201,11 @@ StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
 is no code path that renders someone else's data as an Assay conclusion.
 
+`RetrievedAt` is the instant the source produced its answer. A scan may reuse a
+cached answer ([caching.md](caching.md)), and when it does this is the original
+fetch time rather than the time of the scan, so a report states a claim's true
+age instead of implying it was just checked.
+
 Assay does not maintain a scam list, a rating, or a domain blocklist. That layer
 exists, is actively curated, and is better than anything this project would
 produce. **Do not re-derive it.**

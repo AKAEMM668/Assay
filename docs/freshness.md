@@ -52,6 +52,14 @@ Two of those rows deserve emphasis, because they differ in direction:
   flag was set are exposed. See `internal/mechanics/check_trustline.go` for the
   per-holder reading of the same fact.
 
+A scan reuses cached third-party answers within a bounded lifetime, which does
+not change any of the reasoning above — an attestation's age is still its
+`attested_at` — but it does mean one report can carry evidence of several
+different ages. Each `evidence[].retrieved_at` records the instant its own
+source produced its answer, and never the moment a cache served it, so the true
+age of every claim stays readable. The lifetimes and the guarantee are specified
+in [caching.md](caching.md).
+
 So the freshest-dangerous-direction for a gate holding *existing* balances is a
 flag flip to `auth_revocable`, and it is instant. That asymmetry — staleness
 can only ever under-report danger, never over-report it — is why every window

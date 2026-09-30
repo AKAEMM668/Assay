@@ -97,6 +97,20 @@ type Scanner struct {
 // pointing one at http://127.0.0.1:1 makes that source fail and the scan
 // report undetermined (or fail, for Horizon) rather than succeed.
 func New() *Scanner {
+	return NewWithOptions(DefaultOptions())
+}
+
+// NewWithOptions returns a Scanner wired to the public production sources with
+// the given cache policy.
+//
+// Only the reputation lookups are cached. Horizon is left uncached on purpose:
+// issuer authorization flags are the capability axis severity is derived from,
+// they can change in one ledger close (~5 s), and there is no retrieved-at
+// field in an attestation that could carry the age of a stale flag read. A TTL
+// short enough to be honest about the ledger would not save a request; a TTL
+// long enough to save one would misstate the issuer's power. See
+// docs/caching.md.
+func NewWithOptions(opts Options) *Scanner {
 	return &Scanner{
 		Horizon: horizon.New(os.Getenv("ASSAY_HORIZON_URL")),
 		Toml:    sep1.NewFetcher(),
@@ -104,6 +118,18 @@ func New() *Scanner {
 		Engine:  mechanics.NewEngine(),
 		Lists:   assetlist.New(),
 	}
+}
+
+// expertOptions maps a Scanner's cache policy onto the StellarExpert client's.
+func expertOptions(opts Options) stellarexpert.Options {
+	o := stellarexpert.DefaultOptions()
+	o.DirectoryTTL = opts.ReputationDirectoryTTL
+	o.BlocklistTTL = opts.ReputationBlocklistTTL
+	if opts.NoReputationCache {
+		o.DirectoryTTL = 0
+		o.BlocklistTTL = 0
+	}
+	return o
 }
 
 // Subject fetches everything the checks need for one asset.
@@ -159,8 +185,13 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 		if err != nil {
 			sub.BlockedErr = err.Error()
 		} else {
-			sub.Blocked = blocked
-			sub.BlockedFetchedAt = time.Now().UTC()
+			sub.Blocked = blocked.Value
+			// The source's OWN completion time, which on a cache hit is the
+			// instant the answer was originally fetched. Stamping the lookup
+			// time here instead is the one thing the cache must never cause:
+			// Evidence.RetrievedAt would then claim a freshness the data does
+			// not have, in the report and in the preimage a verifier re-derives.
+			sub.BlockedFetchedAt = blocked.FetchedAt
 		}
 	}
 
@@ -171,8 +202,9 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 	if err != nil {
 		sub.DirectoryErr = err.Error()
 	} else {
-		sub.Directory = entry
-		sub.DirectoryFetchedAt = time.Now().UTC()
+		sub.Directory = entry.Value
+		// As above: the directory answer's own fetch time, not this scan's.
+		sub.DirectoryFetchedAt = entry.FetchedAt
 	}
 
 	// SEP-0042 asset lists, one signal each, in configuration order. Each is
