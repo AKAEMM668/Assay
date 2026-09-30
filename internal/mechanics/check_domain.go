@@ -103,18 +103,22 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		acc = AccountabilityUnverified
 		f.Mechanics = MechDomainUnverified
 
-		// SEP-0001 lets a currency entry delegate to its own TOML file, in
-		// which case the entry carries no code or issuer to match. Assay does
-		// not follow those links yet, so it must not claim the domain failed to
-		// name this asset when it may have done so in a document Assay never
-		// read. Overstating a negative is the same class of error as
-		// overstating a positive.
-		if linked := s.Toml.LinkedCurrencies(); linked > 0 {
+		// SEP-0001 lets a currency entry delegate to its own TOML file, and
+		// does not require the link to be the entry's only field: an entry may
+		// carry a code and issuer next to the link. Assay does not follow those
+		// links yet, so it must not claim the domain failed to name this asset
+		// when it may have done so in a document Assay never read. An entry
+		// that already matches inline is not an unresolved link — it is the
+		// claim itself — so only the entries that do not match are counted.
+		// Overstating a negative is the same class of error as overstating a
+		// positive.
+		if linked := s.Toml.LinkedCurrencies(s.Asset.Code, s.Asset.Issuer); linked > 0 {
 			f.Reasoning = fmt.Sprintf(
 				"The issuer advertises home_domain %q and that domain publishes a "+
 					"stellar.toml, but this asset (%s) is not declared inline in its "+
 					"CURRENCIES. The toml delegates %d currency entries to separate "+
-					"per-currency TOML files, which Assay does not follow yet, so this "+
+					"per-currency TOML files, by a toml link, whether or not the entry "+
+					"also carries a code. Assay does not follow those links yet, so this "+
 					"asset may be claimed in one of them. Treated as unverified "+
 					"because it is unconfirmed, not because it was refuted.",
 				domain, s.Asset, linked)
