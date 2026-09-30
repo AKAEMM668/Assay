@@ -130,6 +130,17 @@ test-gate:
 eval-record:
 	go run ./cmd/eval -out docs/eval-baseline.json
 
+# Re-captures one corpus fixture from the URLs recorded in PROVENANCE.md and
+# prints a diff, so a maintainer can judge whether a moved verdict reflects a
+# real change or a regression. It needs network access, so it is deliberately
+# not part of `make test` or CI. A fetch that fails writes nothing.
+#
+#   make refresh-fixture SUBJECT=aqua-clear-verified
+#   make refresh-fixture SUBJECT=aqua-clear-verified DRY_RUN=1
+refresh-fixture:
+	@test -n "$(SUBJECT)" || { echo 'usage: make refresh-fixture SUBJECT=<fixture-dir>'; exit 2; }
+	go run ./cmd/refreshfixture -subject "$(SUBJECT)" $(if $(DRY_RUN),-dry-run,)
+
 # Compares the current classifier against the recorded baseline and reports
 # what moved: severity, mechanics and evidence separately, with undetermined
 # subjects and corpus membership changes reported on their own. Exits 0 on a

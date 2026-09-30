@@ -239,8 +239,11 @@ Apache-2.0 and upstream payloads remain subject to their providers' terms.
 
 ### Point-in-time refresh pipeline
 
-1. Re-fetch every URL in the manifest and record one UTC capture date for the
-  refresh.
+1. Re-fetch the URLs recorded for a subject and record one UTC capture date for
+  the refresh. `make refresh-fixture SUBJECT=<dir>` does this from the URLs in
+  `PROVENANCE.md`, prints the diff for review, and updates the capture date in
+  both `PROVENANCE.md` and the manifest. A source that fails aborts before
+  anything is written, so a fixture is never left partial.
 2. Store only payloads whose current provider terms permit redistribution. For
   uncertain StellarExpert or issuer material, retain the URL and derived
   annotation rather than adding a new raw copy.
