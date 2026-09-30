@@ -44,7 +44,38 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	if domain == "" {
 		f.Mechanics = MechDomainUnverified
 		f.Reasoning = "The issuer account advertises no home_domain, so there is no " +
-			"published identity to verify against. Nobody has publicly claimed this asset."
+			"published identity to verify against. Nobody has publicly claimed this " +
+			"asset. That is not a failed verification — there was no claim to test — " +
+			"which is why accountability is unknown rather than unverified."
+		return f, nil
+	}
+
+	// The advertised domain and the curated directory disagree about who
+	// claims this asset. Reported before toml reciprocity: whichever way the
+	// toml answers, the two sources cannot both be right, and a holder needs
+	// both claims attributed to their source rather than one silently winning.
+	if s.Directory != nil && s.Directory.Domain != "" && s.Directory.Domain != domain {
+		f.Mechanics = MechDomainUnverified
+		acc = AccountabilityUnverified
+		f.Accountability = &acc
+		f.Reasoning = fmt.Sprintf(
+			"The issuer advertises home_domain %q, but the curated directory lists the "+
+				"same issuer under %q. The two sources disagree about who claims this "+
+				"asset, so accountability is unverified: it cannot be determined which "+
+				"domain, if either, published a reciprocal claim.",
+			domain, s.Directory.Domain)
+		f.Evidence = append(f.Evidence, Evidence{
+			Source:      "horizon",
+			URL:         horizonAccountURL(s.Asset.Issuer),
+			Claim:       fmt.Sprintf("home_domain %q", domain),
+			RetrievedAt: s.IssuerFetchedAt,
+		})
+		f.Evidence = append(f.Evidence, Evidence{
+			Source:      "stellar.expert/directory",
+			URL:         s.DirectoryURL,
+			Claim:       fmt.Sprintf("listed under domain %q", s.Directory.Domain),
+			RetrievedAt: s.DirectoryFetchedAt,
+		})
 		return f, nil
 	}
 

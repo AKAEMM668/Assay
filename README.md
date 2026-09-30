@@ -111,3 +111,4 @@ Four things are worth knowing before you rely on any of it:
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+- [Temporal Trust Model](docs/temporal.md)
