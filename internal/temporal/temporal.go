@@ -80,7 +80,7 @@ type Observation struct {
 func ObservationFromReport(rep *mechanics.Report) Observation {
 	return Observation{
 		Asset:              rep.Asset,
-		At:                 rep.ScannedAt,
+		At:                 rep.ScannedAt.Time(),
 		Mechanics:          rep.Mechanics,
 		Base:               rep.Base,
 		Severity:           rep.Severity,

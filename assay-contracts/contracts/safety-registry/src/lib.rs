@@ -27,7 +27,7 @@
 //! level, never lower one.
 
 use soroban_sdk::{
-    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env,
+    contract, contracterror, contractevent, contractimpl, contracttype, Address, BytesN, Env, Vec,
 };
 
 /// No authorization flags: the issuer has no special power over holders.
@@ -53,6 +53,19 @@ pub const MECH_BLOCKLISTED: u32 = 1 << 5;
 /// Mechanics that let an issuer take a balance outright. Any asset matching
 /// this mask has `severity >= SEVERITY_HIGH` by construction.
 pub const CONFISCATION_MASK: u32 = MECH_CLAWBACK_ENABLED;
+
+/// Capability bits only: the mechanics that are issuer powers over a holder's
+/// balance (auth_required, auth_revocable, auth_clawback_enabled). Everything
+/// outside this mask (auth_immutable, domain_unverified, blocklisted) is a
+/// reported fact, not a power.
+///
+/// This is the mask a consumer should reach for when it wants "the dangerous
+/// bits": #26 happened because a caller hand-rolled that mask from memory and
+/// silently missed the other half of the bitset. The Go side exports the same
+/// value as `mechanics.CapabilityMask`; the ABI drift test fails the build if
+/// the two ever disagree. Bit positions are unchanged — existing attestations
+/// commit to them.
+pub const CAPABILITY_MASK: u32 = MECH_AUTH_REQUIRED | MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED;
 
 /// Named forbidden-bit masks for [`SafetyRegistry::is_safe_masked`]. They exist
 /// so a caller expresses a policy ("I never accept confiscation") rather than
@@ -88,7 +101,9 @@ pub struct Attested {
     pub severity: u32,
     /// Mechanic bitset written for the asset.
     pub flags: u32,
-    /// Ledger timestamp of the write.
+    /// Ledger timestamp of the write, obtained from `env.ledger().timestamp()`
+    /// (seconds since Unix epoch). Authoritative for all on-chain freshness
+    /// decisions (`is_safe`, `is_safe_masked`). See `docs/timestamps.md`.
     pub attested_at: u64,
 }
 
@@ -112,6 +127,34 @@ pub struct Revoked {
     pub revoked_at: u64,
 }
 
+/// One element of a [`SafetyRegistry::attest_many`] batch: the arguments of
+/// [`SafetyRegistry::attest`], minus the `Env`, grouped so a vector of them can
+/// be passed in one call.
+///
+/// It is deliberately *not* [`Safety`]: that is what storage holds, with the
+/// `attested_at` the contract assigns at write time. A caller supplies the
+/// three things the off-chain scanner derived and nothing else — there is no
+/// field here through which a caller could assert when the attestation was
+/// written.
+///
+/// `Vec<Attestation>` is a supported argument type in soroban-sdk 27: a
+/// `#[contracttype]` struct is a UDT, and `Vec<T>` of a UDT is part of the
+/// contract-spec type system (`ScVal::Vec`), so the generated client takes a
+/// `&Vec<Attestation>` and the spec publishes the struct. This is asserted by
+/// the contract compiling and by the batch tests below, which construct one.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Attestation {
+    /// The attested asset, identified by its Stellar Asset Contract address.
+    pub asset: Address,
+    /// Capability severity, `SEVERITY_CLEAR..=SEVERITY_CRITICAL`.
+    pub severity: u32,
+    /// Bitset of observed mechanics.
+    pub flags: u32,
+    /// SHA-256 over the canonical evidence bundle, as in [`Safety`].
+    pub evidence_hash: BytesN<32>,
+}
+
 /// A stored safety attestation for one asset.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,8 +169,45 @@ pub struct Safety {
     /// hashed are specified by `internal/attest` and reproducible with
     /// `assay attestation -preimage CODE-ISSUER`.
     pub evidence_hash: BytesN<32>,
-    /// Ledger timestamp when this attestation was written.
+    /// Ledger timestamp when this attestation was written, obtained from
+    /// `env.ledger().timestamp()` (seconds since Unix epoch).
+    ///
+    /// This is the authoritative timestamp for all on-chain freshness decisions
+    /// (`is_safe`, `is_safe_masked`). It reflects the consensus ledger close
+    /// time and is independent of off-chain scanner host clocks. See
+    /// `docs/timestamps.md`.
     pub attested_at: u64,
+}
+
+/// Event emitted when an attestation is written or overwritten.
+///
+/// This event provides an on-chain audit trail so that any overwrite of an
+/// attestation can be detected and the previous value reconstructed from
+/// chain history.
+///
+/// Topics:
+/// - `"attest"`: static topic identifying the event type
+/// - `asset`: the Stellar Asset Contract address (as Address)
+///
+/// Data:
+/// - `previous`: the previous attestation, or `None` if this is the first
+///   attestation for this asset
+/// - `current`: the new attestation that was written
+///
+/// Retention: Soroban contract events are retained in ledger history for
+/// approximately 1 year (the same retention as ledger entries). Beyond that
+/// window, history is not reconstructible from chain alone; an off-chain
+/// indexer or archive is required for longer audit trails.
+#[contractevent(topics = ["attest"], data_format = "map")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationEvent {
+    /// The asset this attestation is for.
+    pub asset: Address,
+    /// The previous attestation, if any. `None` means this is the first
+    /// attestation for this asset.
+    pub previous: Option<Safety>,
+    /// The new attestation that was written.
+    pub current: Safety,
 }
 
 #[contracttype]
@@ -157,6 +237,11 @@ pub enum Error {
     /// wrong address fails loudly instead of reporting success while the
     /// attestation it was meant to withdraw still stands.
     NotAttested = 5,
+    /// `attest_many` was given more than [`MAX_BATCH_SIZE`] attestations.
+    /// Rejected rather than truncated: silently dropping the tail would report
+    /// success for assets that were never written, and the off-chain pipeline
+    /// would move on believing they had been re-attested.
+    BatchTooLarge = 6,
 }
 
 /// Extends the contract instance's TTL to the network maximum. Extending the
@@ -180,6 +265,99 @@ fn extend_attestation(env: &Env, key: &DataKey) {
     env.storage().persistent().extend_ttl(key, max, max);
 }
 
+/// The write-time validation shared by [`SafetyRegistry::attest`] and
+/// [`SafetyRegistry::attest_many`].
+///
+/// It is one function rather than two copies on purpose: the batch path must
+/// not be able to accept anything the single path refuses, and the only way to
+/// be sure of that is for both to call the same code. A reviewer can see the
+/// invariant is not bypassable by reading this function's two call sites.
+fn validate_attestation(severity: u32, flags: u32) -> Result<(), Error> {
+    if severity > SEVERITY_CRITICAL {
+        return Err(Error::InvalidSeverity);
+    }
+    if flags & CONFISCATION_MASK != 0 && severity < SEVERITY_HIGH {
+        return Err(Error::InconsistentAttestation);
+    }
+    Ok(())
+}
+
+/// Writes one attestation and publishes its event. Shared by both write paths
+/// so a batched element and a single call cannot diverge in what they store or
+/// in what an indexer observes.
+fn write_attestation(
+    env: &Env,
+    asset: Address,
+    severity: u32,
+    flags: u32,
+    evidence_hash: BytesN<32>,
+    attested_at: u64,
+) {
+    let key = DataKey::Safety(asset.clone());
+    let safety = Safety {
+        severity,
+        flags,
+        evidence_hash,
+        attested_at,
+    };
+    env.storage().persistent().set(&key, &safety);
+    extend_attestation(env, &key);
+
+    // Publish after the write. Emitting before would let a storage failure
+    // produce a visible "attest" for an attestation that does not exist;
+    // emitting after means indexers observe writes that actually happened.
+    Attested {
+        asset,
+        severity,
+        flags,
+        attested_at,
+    }
+    .publish(env);
+}
+
+/// The largest number of attestations [`SafetyRegistry::attest_many`] accepts
+/// in one call.
+///
+/// The cap is derived from the network's transaction resource limits rather
+/// than picked for tidiness: it is the tightest of them divided down to leave
+/// headroom. The limits were read live on 2026-09-27 with
+/// `stellar network settings --network testnet` (protocol 28), and match
+/// `InvocationResourceLimits::mainnet()` in soroban-sdk 27.0.5. The cost column
+/// is a real 50-element batch measured through those same limits by
+/// `batch_size_bound_is_measured_and_holds_headroom`:
+///
+/// | Limit | Live network | A full 50-element batch |
+/// | --- | --- | --- |
+/// | **contract event bytes** | **16 384** | **10 000 (61%) — the binding limit** |
+/// | ledger entries written | 200 | 51 (26%) |
+/// | transaction footprint entries | 400 | 105 (26%) |
+/// | bytes written | 132 096 | 14 072 (11%) |
+/// | instructions | 400 000 000 | 3 275 513 (0.8%) |
+/// | memory | 41 943 040 | 514 609 (1.2%) |
+///
+/// # What actually binds
+///
+/// Each element publishes its own `Attested` event, and one such event costs
+/// exactly 200 bytes. The event budget therefore admits at most 81 elements
+/// no matter how frugal the writes are — 81 is the hard ceiling, and 100 was
+/// measured failing at `20000 > 16384`. 50 sits at 61% of that budget, leaves
+/// room for the event schema to grow before the cap is wrong, and costs a
+/// quarter of every other limit, including the write budget one would have
+/// guessed was binding.
+///
+/// Per-asset events are kept rather than collapsed into one batch-sized event
+/// precisely because of that cost: a single event would raise the ceiling, but
+/// it would take away the property that an indexer can subscribe by asset
+/// (`("attest", asset)` topics) and see every write to that asset without
+/// decoding batch bodies. A higher cap is worth less than that.
+///
+/// `batch_size_bound_is_measured_and_holds_headroom` runs a full batch with the
+/// SDK's own mainnet resource enforcement switched on — which `Env::default`
+/// enables — and asserts both that it fits every limit and that the per-event
+/// cost has not moved, so the cap cannot quietly drift out from under the
+/// contract when the code below it changes.
+pub const MAX_BATCH_SIZE: u32 = 50;
+
 #[contract]
 pub struct SafetyRegistry;
 
@@ -202,6 +380,10 @@ impl SafetyRegistry {
     /// scan, and `make attest` submits them. Validation here is not a
     /// formality: it enforces at write time the invariants that
     /// [`Self::is_safe`] relies on at read time.
+    ///
+    /// Emits an [`AttestationEvent`] with the previous value (if any) and the
+    /// new value, providing an on-chain audit trail. See the event
+    /// documentation for retention semantics.
     pub fn attest(
         env: Env,
         asset: Address,
@@ -216,36 +398,140 @@ impl SafetyRegistry {
             .ok_or(Error::NotInitialized)?;
         admin.require_auth();
 
-        if severity > SEVERITY_CRITICAL {
-            return Err(Error::InvalidSeverity);
-        }
-        if flags & CONFISCATION_MASK != 0 && severity < SEVERITY_HIGH {
-            return Err(Error::InconsistentAttestation);
-        }
+        validate_attestation(severity, flags)?;
 
-        let attested_at = env.ledger().timestamp();
-        let safety = Safety {
+        write_attestation(
+            &env,
+            asset,
             severity,
             flags,
             evidence_hash,
             attested_at,
         };
+
+        // Read the previous value before overwriting
+        let previous = env
+            .storage()
+            .persistent()
+            .get::<DataKey, Safety>(&DataKey::Safety(asset.clone()));
+
+        // Write the new attestation
+        env.storage()
+            .persistent()
+            .set(&DataKey::Safety(asset.clone()), &safety);
+
+        // Extend TTL to maximum so the attestation persists until explicitly
+        // overwritten. Freshness is enforced by the caller via max_age_secs on
+        // is_safe, not by storage expiry.
+        env.storage().persistent().extend_ttl(
+            &DataKey::Safety(asset),
+            100,
+            env.storage().max_ttl(),
+        );
         let key = DataKey::Safety(asset.clone());
         env.storage().persistent().set(&key, &safety);
         extend_attestation(&env, &key);
         extend_instance(&env);
+        Ok(())
+    }
 
-        // Publish after the write. Emitting before would let a storage failure
-        // produce a visible "attest" for an attestation that does not exist;
-        // emitting after means indexers observe writes that actually happened.
-        // Rejected calls return early above, so no event is published for them.
-        Attested {
-            asset,
-            severity,
-            flags,
-            attested_at,
+    /// Writes attestations for many assets in one transaction, so the pipeline
+    /// can cover more than a curated few per ledger of fee budget.
+    ///
+    /// Each element is written exactly as [`Self::attest`] writes it: the same
+    /// key, the same value, the same `Attested` event, and the same validation,
+    /// which both paths get from the same `validate_attestation`. A read after
+    /// a batch is therefore indistinguishable from a read after the equivalent
+    /// sequence of single calls — the property
+    /// `batch_reads_match_single_write_path` pins.
+    ///
+    /// # All-or-nothing
+    ///
+    /// A batch is applied whole or not at all. Every element is validated
+    /// before the first write, so a batch containing one bad element returns
+    /// [`Error::InvalidSeverity`] or [`Error::InconsistentAttestation`] and
+    /// stores nothing: there is no view in which some assets were re-attested
+    /// and others silently were not. Nothing is truncated or skipped to make a
+    /// partly-bad batch fit.
+    ///
+    /// The host already rolls a transaction back on failure, so a batch could
+    /// not half-commit even without this. The two-phase shape buys two things
+    /// on top of that. The failure is *typed and deterministic* — an error a
+    /// caller can branch on, rather than "some write in the middle exceeded a
+    /// resource limit" — and it is *cheap*: a batch whose last element is bad
+    /// does not first pay to write the 49 before it.
+    ///
+    /// # Bound
+    ///
+    /// At most [`MAX_BATCH_SIZE`] attestations are accepted; a longer vector
+    /// returns [`Error::BatchTooLarge`] and writes nothing. See
+    /// [`MAX_BATCH_SIZE`] for where the cap comes from and
+    /// `docs/contract-interface.md` for the measured headroom. A batch larger
+    /// than the cap is an error rather than a truncation on purpose: a caller
+    /// that sent 500 attestations and got back `Ok` would believe all 500 were
+    /// recorded.
+    ///
+    /// # Empty batches
+    ///
+    /// An empty batch succeeds and does nothing: no storage write, no event,
+    /// and (unlike a non-empty batch) no instance TTL extension. That is the
+    /// honest reading of all-or-nothing over zero elements, and it lets the
+    /// pipeline call this with whatever the scan produced without the caller
+    /// special-casing "nothing changed this round". It is named in the tests
+    /// so it stays a decision rather than an accident.
+    ///
+    /// # One timestamp per batch
+    ///
+    /// Every element written by one call carries the same `attested_at`: the
+    /// timestamp of the ledger the batch landed in. `attested_at` records when
+    /// the write happened, not when each scan ran, and the elements of one
+    /// call were written at the same instant. A consumer comparing two
+    /// assets' freshness from the same batch is comparing the same number.
+    ///
+    /// If the same asset appears twice, both elements are applied in order and
+    /// both events are published; the second write wins. That is what the same
+    /// two calls to [`Self::attest`] would do, and there is nothing to
+    /// reconcile — the caller asserted the later value last.
+    pub fn attest_many(env: Env, attestations: Vec<Attestation>) -> Result<(), Error> {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .ok_or(Error::NotInitialized)?;
+        // Authorized even for an empty batch: the reject path must not differ
+        // by length, and "who may call this at all" is a property of the
+        // entrypoint rather than of what it was handed.
+        admin.require_auth();
+
+        if attestations.len() > MAX_BATCH_SIZE {
+            return Err(Error::BatchTooLarge);
         }
-        .publish(&env);
+
+        // Phase one: validate every element before anything is written. This is
+        // what makes the batch all-or-nothing at the contract level rather than
+        // only by the host's transaction rollback.
+        for a in attestations.iter() {
+            validate_attestation(a.severity, a.flags)?;
+        }
+
+        if attestations.is_empty() {
+            return Ok(());
+        }
+
+        // Phase two: write. One ledger timestamp for the whole batch, read once
+        // so every element agrees on it.
+        let attested_at = env.ledger().timestamp();
+        for a in attestations.iter() {
+            write_attestation(
+                &env,
+                a.asset.clone(),
+                a.severity,
+                a.flags,
+                a.evidence_hash.clone(),
+                attested_at,
+            );
+        }
+        extend_instance(&env);
         Ok(())
     }
 
@@ -290,6 +576,16 @@ impl SafetyRegistry {
     /// collapsing the two would make every unknown asset read as safe, which is
     /// the single worst failure this contract could have.
     ///
+    /// Archived entries (TTL expired) are automatically restored per CAP-0066 /
+    /// Protocol 23 when accessed. After restoration, the entry returns
+    /// `Some(Safety)` with the original `attested_at` timestamp. This makes
+    /// archived entries distinguishable from never-attested ones:
+    /// - Never attested: returns `None`
+    /// - Archived (restored): returns `Some(Safety)` with original `attested_at`
+    ///
+    /// The `attest` function extends the TTL to the maximum on every write, so
+    /// archival should not occur in normal operation. Freshness is enforced by
+    /// the caller via `max_age_secs` on `is_safe`, not by storage expiry.
     /// `None` also covers a revoked attestation: storage keeps no tombstone,
     /// so a caller cannot tell revoked from never attested. Both mean "no
     /// claim stands", and both fail closed.
@@ -308,6 +604,16 @@ impl SafetyRegistry {
     /// attested, stale, too severe, or inconsistent. The safe answer is the
     /// default, so a caller that gets the arguments wrong blocks rather than
     /// admits.
+    ///
+    /// Failure modes (all return `false`):
+    /// - Never attested: `get_safety` returns `None`
+    /// - Stale: `attested_at` older than `max_age_secs`
+    /// - Too severe: `severity > max_severity`
+    /// - Inconsistent: clawback capability attested below `SEVERITY_HIGH`
+    ///
+    /// A caller that needs to diagnose why a gate rejected can call
+    /// `get_safety` directly: `None` means never attested; `Some(Safety)`
+    /// with an old `attested_at` means the attestation has lapsed.
     ///
     /// `max_age_secs` of 0 disables the freshness requirement.
     pub fn is_safe(env: Env, asset: Address, max_severity: u32, max_age_secs: u64) -> bool {
