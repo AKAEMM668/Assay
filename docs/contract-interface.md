@@ -394,6 +394,30 @@ tends to care about a specific power rather than about an ordering.
 [integrating.md](integrating.md) works through both, against the live
 deployment.
 
+### Which bits are powers and which are reports
+
+The `flags` bitset mixes two kinds of fact, and the boundary between them is
+named and exported on both sides (issue #34) so a consumer never has to know
+the table by heart:
+
+- **Powers — bits 0–2** — describe what the issuer can do to a holder's
+  balance: `MECH_AUTH_REQUIRED` (1<<0, gate entry), `MECH_AUTH_REVOCABLE`
+  (1<<1, freeze), `MECH_CLAWBACK_ENABLED` (1<<2, confiscate). They are
+  selectable through the exported capability mask: `CAPABILITY_MASK` in
+  `assay-contracts/contracts/safety-registry/src/lib.rs`, `CapabilityMask` in
+  `internal/mechanics/severity.go`. The ABI drift test fails the build if the
+  two sides ever disagree.
+- **Reports — bits 3–5** — describe facts someone stated or observed, not
+  powers: `MECH_FLAGS_LOCKED` (1<<3, the flag set cannot change again),
+  `MECH_DOMAIN_UNVERIFIED` (1<<4, reciprocal SEP-1 verification failed),
+  `MECH_BLOCKLISTED` (1<<5, a curated source flagged the issuer). Reputation
+  escalation lives entirely on this side of the boundary, which is why a mask
+  over the capability bits alone cannot see it — the #26 failure. Severity is
+  the axis that carries escalation; the bitset carries the powers.
+
+Bit positions are ABI: the ten on-chain attestations commit to them, and
+nothing in this change renumbers or moves a bit — it only names the boundary.
+
 ### `evidence_hash` commits to the claims, not to the clock
 
 `evidence_hash` is `SHA-256` over a canonical rendering of the report, produced
@@ -446,6 +470,53 @@ no bound check set carries the network line but not the checks line.
 The committed vectors `network-bound-pubnet` and `network-bound-testnet` in
 `internal/attest/testdata/vectors` are byte-identical except for the network
 line and hash differently, which is the property this encoding exists for.
+
+#### The preimage binds the scanner identity
+
+A report that also names the code that produced it is written as
+`assay-evidence-v3`, which adds one line **immediately after the version
+line** (identity before content), specified precisely enough to reimplement
+(issue #40):
+
+```
+scanner	VERSION
+```
+
+`VERSION` is the scanner's Go **module version** — the string recorded by
+`go version -m` for the `github.com/use-assay/assay` module, e.g. `v1.2.3` —
+or the literal `devel` when the binary was built from source without a
+version stamp. The value is taken from `attest.ScannerIdentity`
+(`internal/attest/attest.go`), escaped like every other field (inside any
+field, `\` becomes `\\`, tab becomes `\t`, and so on).
+
+**Why the module version and not a build-stamped commit.** A commit stamp
+would make every local dev build produce a different hash for identical
+evidence, destroying the cross-machine and cross-version reproducibility the
+hash exists for. The module version changes exactly when the code changes,
+is stable across machines for a given release, and is verifiable by anyone
+who can run the module. `devel` is a deliberate sentinel: a hash produced by
+an unstamped build is distinguishable from any tagged release rather than
+silently pretending to be one. A report opts into this encoding through
+`Report.ScannerBound`; reports that do not set it keep their exact v1/v2
+bytes.
+
+This closes the downgrade hole: two scanner versions that classify an asset
+differently previously produced equally valid hashes, and a downgrade to a
+version with a known bug was undetectable. Under v3 the hashed bytes name
+their producer, so the same evidence hashed by different scanner versions
+cannot collide.
+
+**Migration for the ten v1 attestations on chain.** They are hashed under
+v1/v2 encodings and **verify only under those encodings**: a verifier must
+reproduce their bytes without the scanner line (reports that do not set
+`ScannerBound` do exactly that). They are NOT re-attested as part of this
+change — re-attestation is a maintainer decision with a signing ceremony, and
+nothing here can or should do it silently. New attestations SHOULD be written
+under v3 (bind their scanner) so the downgrade guarantee applies to them. A
+future re-attestation pass would move the live set to v3; until then,
+`docs/deployment.md` remains the record of which encoding each live
+attestation verifies under (v1: pre-check-set writes; v3: anything attested
+after this change lands).
 
 with one `evidence` line per attributed claim, sorted bytewise. Inside any
 field, `\` becomes `\\`, tab becomes `\t`, newline `\n`, carriage return `\r`.

@@ -379,6 +379,17 @@ type Report struct {
 	// "complete".
 	CheckSet []string `json:"checks,omitempty"`
 
+	// ScannerBound opts this report into the v3 preimage encoding, which
+	// adds a `scanner` line naming the code that produced the report
+	// (issue #40). It is a deliberate opt-in flag rather than automatic so
+	// the encoding stays a property of the report: v1/v2 bytes are unchanged
+	// for every report that does not set it, which is what keeps the ten
+	// attestations already on chain reproducible. The identity itself is
+	// attest.ScannerIdentity (the module version); the flag only decides
+	// whether the hashed bytes name it. Serialized so a report document can
+	// carry the fact that it was produced under identity binding.
+	ScannerBound bool `json:"scanner_bound,omitempty"`
+
 	Mechanics     Mechanic   `json:"-"`
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
