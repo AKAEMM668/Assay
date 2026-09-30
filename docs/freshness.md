@@ -24,7 +24,9 @@ registry would be wrong for most of them and upgradeable only by contract
 migration. So the registry exposes the timestamp and takes the tolerance as a
 parameter: [integrating.md](integrating.md) calls this "your policy, not
 Assay's", and this page is what makes that choice an informed one instead of a
-copy-pasted constant.
+copy-pasted constant. See [timestamps.md](timestamps.md) for the exact clock
+sources, precision, and authority definitions separating observation, scan, and
+attestation timestamps.
 
 ## What can change under an attestation
 
