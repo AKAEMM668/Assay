@@ -170,6 +170,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: verify CODEOWNERS paths
+        run: ./scripts/check-codeowners.sh
+
       - name: check maintainer-owned paths
         run: |
           BASE=$(git merge-base origin/${{ github.base_ref }} ${{ github.event.pull_request.head.sha }})
