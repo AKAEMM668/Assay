@@ -247,8 +247,9 @@ history of the fix is
 contract constant. Assay does not silently serve stale safety, and it does not
 guess how fresh is fresh enough — a DEX listing gate and a large settlement
 have very different tolerances. `max_age_secs = 0` opts out explicitly.
-Recommended bands with reasoning, the re-attestation cadence, and consumer
-guidance are in [freshness.md](freshness.md).
+`attested_at` is the authoritative timestamp for on-chain freshness decisions
+(see [timestamps.md](timestamps.md)); recommended bands with reasoning, the
+re-attestation cadence, and consumer guidance are in [freshness.md](freshness.md).
 
 [freshness.md](freshness.md) is the guidance for picking a value: what changes
 under an attestation, how fast (measured, not guessed), and defensible windows
