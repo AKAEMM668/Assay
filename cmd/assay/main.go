@@ -43,6 +43,10 @@ Every command that scans accepts:
   -no-cache                re-fetch curated sources on every scan
   assay serve [-addr] [-history PATH]
                                   serve the HTTP API and UI
+
+Commands that scan also accept:
+  -asset-lists URL[,URL...]       SEP-0042 Stellar Asset Lists to consume
+                                  (repeatable). No list is used by default.
 `)
 }
 
@@ -71,7 +75,7 @@ func run(args []string) error {
 
 func runScan(args []string) error {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
-	cache := cacheFlags(fs)
+	assetLists := assetListFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -86,7 +90,7 @@ func runScan(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -96,31 +100,47 @@ func runScan(args []string) error {
 	return enc.Encode(report)
 }
 
-// cacheFlags registers the consumed-signal cache flags shared by every command
-// that scans, and returns a constructor for the Scanner options they describe.
+// assetListFlags registers the -asset-lists flag shared by every command that
+// scans, and returns a constructor for the URLs it names.
 //
-// Caching is on by default because every scan consumes a free, rate-limited
-// service, and re-fetching an answer that has not changed is discourteous to
-// its operators. The flags exist so a deployment can trade the other way — a
-// one-shot scan can afford to re-fetch everything — without the choice being
-// hidden in a constant. Whatever the choice, Evidence.RetrievedAt is the time
-// the source produced its answer, so a report never reads as fresher than its
-// data. See docs/caching.md.
-func cacheFlags(fs *flag.FlagSet) func() scan.Options {
-	def := scan.DefaultOptions()
-	directory := fs.Duration("cache-directory-ttl", def.ReputationDirectoryTTL,
-		"how long a curated directory answer may be reused (0 disables)")
-	blocklist := fs.Duration("cache-blocklist-ttl", def.ReputationBlocklistTTL,
-		"how long a blocklist answer may be reused (0 disables); lower it to tighten a safety-critical window")
-	off := fs.Bool("no-cache", false,
-		"re-fetch curated sources on every scan instead of serving a cached answer")
-	return func() scan.Options {
-		return scan.Options{
-			ReputationDirectoryTTL: *directory,
-			ReputationBlocklistTTL: *blocklist,
-			NoReputationCache:      *off,
+// No list is a default, and that is deliberate: shipping one would hard-code a
+// provider's curation as authoritative for every scan, and would add evidence
+// to every report — which changes every evidence_hash, including for assets
+// already attested. A caller opts in, and each list it names is attributed
+// separately by name and URL. See docs/asset-lists.md.
+func assetListFlags(fs *flag.FlagSet) func() []string {
+	var urls listFlag
+	fs.Var(&urls, "asset-lists",
+		"SEP-0042 Stellar Asset List URLs to consume, comma-separated or repeated; none by default")
+	return func() []string {
+		return append([]string(nil), urls...)
+	}
+}
+
+// newScanner returns a production Scanner configured to consult the given
+// SEP-0042 asset lists.
+func newScanner(lists []string) *scan.Scanner {
+	sc := scan.New()
+	sc.AssetListURLs = lists
+	return sc
+}
+
+// listFlag collects repeated -asset-lists values as well as comma-separated
+// ones, so both forms work:
+//
+//	-asset-lists=a,b -asset-lists=c
+//	-asset-lists a -asset-lists b
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			*l = append(*l, p)
 		}
 	}
+	return nil
 }
 
 // runAttestation prints the arguments of an on-chain attest() call for one
@@ -132,7 +152,7 @@ func cacheFlags(fs *flag.FlagSet) func() scan.Options {
 // recomputed from -preimage — before a key ever touches them.
 func runAttestation(args []string) error {
 	fs := flag.NewFlagSet("attestation", flag.ContinueOnError)
-	cache := cacheFlags(fs)
+	assetLists := assetListFlags(fs)
 	preimage := fs.Bool("preimage", false, "include the canonical bytes evidence_hash commits to")
 	raw := fs.Bool("raw", false, "print only the attest() arguments, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -149,7 +169,7 @@ func runAttestation(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -173,7 +193,7 @@ func runAttestation(args []string) error {
 
 func runHistory(args []string) error {
 	fs := flag.NewFlagSet("history", flag.ContinueOnError)
-	cache := cacheFlags(fs)
+	assetLists := assetListFlags(fs)
 	guarantee := fs.Bool("guarantee", false, "exit non-zero when there is no history")
 	raw := fs.Bool("raw", false, "print only the history, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -191,7 +211,7 @@ func runHistory(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.NewWithOptions(cache()).Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -271,6 +291,7 @@ var candidateTransitions = []string{
 	"blocked",
 	"unverified",
 	"not retrievable",
+	"not present",
 	"credits",
 	"claims",
 	"borrow",
@@ -287,7 +308,7 @@ type historyEntry struct {
 
 func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	cache := cacheFlags(fs)
+	assetLists := assetListFlags(fs)
 	addr := fs.String("addr", ":8080", "listen address")
 	historyPath := fs.String("history", "",
 		"path to the observation history log (JSON Lines); empty keeps history in memory only")
@@ -302,6 +323,10 @@ func runServe(args []string, log *slog.Logger) error {
 		Addr:              *addr,
 		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
 	srv := api.NewServer(log)
+	// The server is where a list configuration matters most: every scan it
+	// serves consults the same configured lists, attributed the same way, and
+	// records them in the observation history like any other evidence.
+	srv.Scanner = newScanner(assetLists())
 	if *historyPath != "" {
 		store, err := historystore.Open(*historyPath)
 		if err != nil {

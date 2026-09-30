@@ -14,19 +14,12 @@ usage:
                                   serve the HTTP API and UI
 ```
 
-Every command that scans consumes StellarExpert's curated directory and
-blocklist, and caches them per process so repeated scans do not re-read a free
-service. The cache is on by default; see [caching.md](caching.md) for the
-lifetimes and the reasoning behind them:
+Commands that scan also accept:
 
-- `-cache-directory-ttl D` — reuse a curated directory answer for `D`
-  (`0` disables caching for that source).
-- `-cache-blocklist-ttl D` — reuse a blocklist answer for `D` (`0` disables).
-- `-no-cache` — re-fetch both sources on every scan.
-
-Whatever the setting, each report's evidence carries the time the **source**
-produced its answer, never the time of the scan that reused it, so a report
-never reads as fresher than its data.
+- `-asset-lists URL[,URL...]` — SEP-0042 Stellar Asset Lists to consume, given
+  as a comma-separated list or repeated. **No list is used by default**: nothing
+  is hardcoded as authoritative, and no report changes unless you opt in. See
+  [asset-lists.md](asset-lists.md).
 
 ## assay scan
 

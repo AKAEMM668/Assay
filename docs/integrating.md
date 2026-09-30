@@ -32,6 +32,10 @@ the scanner read, and anyone can re-scan and recompute it. The complete
 statement of what the admin key can and cannot do is in [Trust boundary: the
 admin key](contract-interface.md#trust-boundary-the-admin-key).
 
+For a complete breakdown of every party you are trusting (issuer, attester key,
+Horizon, and reputation providers) and the consequences if each is dishonest or
+wrong, see [trust.md](trust.md).
+
 ## 1. Declare the interface
 
 You do not need a dependency on Assay. Declare the parts you call:

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/use-assay/assay/internal/assetlist"
 	"github.com/use-assay/assay/internal/horizon"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/sep1"
@@ -69,6 +70,17 @@ type Scanner struct {
 	Toml    *sep1.Fetcher
 	Expert  *stellarexpert.Client
 	Engine  *mechanics.Engine
+	// Lists fetches the configured SEP-0042 Stellar Asset Lists.
+	Lists *assetlist.Client
+
+	// AssetListURLs are the curated lists consulted for every scan, in order.
+	//
+	// It is empty by default, deliberately: no list is shipped as
+	// authoritative, and shipping a default one would also add evidence to
+	// every report — which changes every evidence_hash, including for assets
+	// already attested. Configure it explicitly (or with -asset-lists) and each
+	// list is attributed separately by name and URL.
+	AssetListURLs []string
 }
 
 // New returns a Scanner wired to the public production sources.
@@ -104,6 +116,7 @@ func NewWithOptions(opts Options) *Scanner {
 		Toml:    sep1.NewFetcher(),
 		Expert:  stellarexpert.New(os.Getenv("ASSAY_STELLAREXPERT_URL")),
 		Engine:  mechanics.NewEngine(),
+		Lists:   assetlist.New(),
 	}
 }
 
@@ -127,7 +140,11 @@ func expertOptions(opts Options) stellarexpert.Options {
 // page. When a source is unreachable the failure is recorded verbatim and
 // surfaced, never smoothed into a false negative.
 func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Subject, error) {
-	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC()}
+	network, err := s.resolveNetwork()
+	if err != nil {
+		return nil, err
+	}
+	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC(), Network: network}
 
 	stat, err := s.Horizon.Asset(ctx, a.Code, a.Issuer)
 	if err != nil {
@@ -188,6 +205,48 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 		sub.Directory = entry.Value
 		// As above: the directory answer's own fetch time, not this scan's.
 		sub.DirectoryFetchedAt = entry.FetchedAt
+	}
+
+	// SEP-0042 asset lists, one signal each, in configuration order. Each is
+	// best-effort for the same reason every other consumed signal is: a list
+	// that is down must not turn a dangerous asset into an error page. The
+	// failure is recorded per list, so one bad URL cannot be read as another
+	// provider's silence, and an unreadable list is recorded as a failure
+	// rather than as an absence.
+	if len(s.AssetListURLs) > 0 {
+		lists := s.Lists
+		if lists == nil {
+			lists = assetlist.New()
+		}
+		for _, listURL := range s.AssetListURLs {
+			attempted := time.Now().UTC()
+			list, err := lists.Fetch(ctx, listURL)
+			if err != nil {
+				sub.AssetLists = append(sub.AssetLists, mechanics.AssetListSignal{
+					URL:         listURL,
+					AttemptedAt: attempted,
+					Err:         err.Error(),
+				})
+				continue
+			}
+			sig := mechanics.AssetListSignal{
+				Name:        list.Name,
+				Provider:    list.Provider,
+				URL:         list.URL,
+				Version:     list.Version,
+				Network:     list.Network,
+				FetchedAt:   list.FetchedAt,
+				AttemptedAt: attempted,
+			}
+			// Match on the classic pair, and on the asset's contract address as
+			// a second key: a list may publish either, and Horizon reports the
+			// SAC on the asset record we already hold.
+			if e, ok := list.Lookup(a.Code, a.Issuer, stat.ContractID); ok {
+				sig.Entry = &e
+				sig.Listed = true
+			}
+			sub.AssetLists = append(sub.AssetLists, sig)
+		}
 	}
 
 	return sub, nil
