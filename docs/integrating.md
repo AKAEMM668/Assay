@@ -28,8 +28,13 @@ than the one your transaction lands in.
 
 So you are trusting the attester. Today that is one key. `evidence_hash` is what
 makes the trust checkable rather than absolute: it commits to the exact evidence
-the scanner read, and anyone can re-scan and recompute it. See
-[contract-interface.md](contract-interface.md).
+the scanner read, and anyone can re-scan and recompute it. The complete
+statement of what the admin key can and cannot do is in [Trust boundary: the
+admin key](contract-interface.md#trust-boundary-the-admin-key).
+
+For a complete breakdown of every party you are trusting (issuer, attester key,
+Horizon, and reputation providers) and the consequences if each is dishonest or
+wrong, see [trust.md](trust.md).
 
 ## 1. Declare the interface
 
@@ -106,17 +111,24 @@ The reason is structural. Reputation escalation raises `severity` and sets
 bits describe what the issuer *can do*, and a scam listing is not a capability.
 So a mask over capability bits cannot see escalation, by design.
 
-Note also that bits `1 << 3` through `1 << 5` are reported, not powers. Refusing
-on `domain_unverified` refuses most of the network, including plenty of assets
-whose issuers can do nothing to you.
+Note also that bits `1 << 3` through `1 << 5` are **reported, not powers** —
+and that boundary now has a name on both sides rather than living in the table:
+`CAPABILITY_MASK` (Rust, in the registry) and `mechanics.CapabilityMask` (Go)
+select exactly the three power bits `auth_required | auth_revocable |
+auth_clawback_enabled`, and the ABI drift test fails the build if the two
+sides ever disagree (issue #34). Refusing on bits outside the mask —
+`domain_unverified`, `blocklisted` — refuses most of the network, including
+plenty of assets whose issuers can do nothing to you.
 
 ## 3. Write the gate
 
 ```rust
-pub const MECH_AUTH_REVOCABLE: u32 = 1 << 1;
-pub const MECH_CLAWBACK_ENABLED: u32 = 1 << 2;
+use assay_safety_registry::{CAPABILITY_MASK, MECH_AUTH_REVOCABLE, MECH_CLAWBACK_ENABLED};
 
-/// Powers a custodial balance cannot survive.
+/// Powers a custodial balance cannot survive: the freeze and clawback bits
+/// selected through Assay's exported capability mask rather than hand-rolled
+/// from memory. The registry exports CAPABILITY_MASK (all three power bits)
+/// and the policy masks below; picking bits by hand is how #26 happened.
 pub const REFUSED_MECHANICS: u32 = MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED;
 
 /// The other half. Without this, an asset that is critical purely by
@@ -362,7 +374,8 @@ registry id and network default to the live testnet deployment recorded in
   must treat as "unknown", and which — if you gate correctly — means your
   contract refuses nearly every asset on the network.
 - **One key can write any attestation.** There is no multisig and no threshold
-  of independent attesters yet.
+  of independent attesters yet. The complete statement of powers and limits is
+  in [Trust boundary: the admin key](contract-interface.md#trust-boundary-the-admin-key).
 - **Nothing refreshes the attestations.** They are exactly as fresh as their
   `attested_at`. Choose a `max_age_secs` you would actually accept.
 - Testnet is periodically reset, which removes these attestations. The live
