@@ -57,6 +57,13 @@ type Evidence struct {
 	// and got nothing" — the same programmatic distinguishability rule the
 	// Undetermined flag follows for findings.
 	Attempted bool `json:"attempted"`
+	// Refused marks evidence whose failure is a host-policy refusal rather
+	// than an ordinary fetch failure. A refusal says the scanner declined to
+	// make the request at all; an ordinary failure says the request was made
+	// and did not complete. Both are attempts, but they are different facts
+	// and must be distinguishable by a program, not only by the wording of
+	// Claim.
+	Refused bool `json:"refused,omitempty"`
 }
 
 // Finding is one check's result.
@@ -112,10 +119,20 @@ type Subject struct {
 	// did not, and is reported verbatim rather than being smoothed over.
 	// A resolved Doc carries its own FetchedAt; TomlAttemptedAt is when the
 	// fetch was attempted, used for failure evidence where no Doc exists.
+	// TomlRefused reports that TomlErr is a host-policy refusal rather than an
+	// ordinary fetch failure, so a refusal can be recorded as one.
 	Toml            *sep1.Doc
 	TomlURL         string
 	TomlErr         string
+	TomlRefused     bool
 	TomlAttemptedAt time.Time
+
+	// TomlLinked is the result of following the per-currency TOML links the
+	// resolved Doc delegates to, bounded by sep1.MaxLinkedDocuments and subject
+	// to the same host policy as the main fetch. It is nil when there were no
+	// links to follow, which is how "nothing was delegated" stays distinct
+	// from "a linked document was read and did not match".
+	TomlLinked *sep1.LinkedResolution
 
 	// Directory and Blocked are the curated reputation signals. Each has an Err
 	// field for the same reason TomlErr exists: a nil entry means "not listed"

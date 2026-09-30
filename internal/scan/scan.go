@@ -170,12 +170,24 @@ func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Su
 		doc, err := s.Toml.Fetch(ctx, domain)
 		if err != nil {
 			sub.TomlErr = err.Error()
+			// A host-policy refusal is a decision, not an outage. It is
+			// recorded as such so the domain check can report a refusal rather
+			// than a source that failed to answer.
+			sub.TomlRefused = errors.Is(err, sep1.ErrNonPublicHost)
 			// A failed fetch has no completion time, so the attempt time is
 			// what failure evidence carries — explicitly labelled as an attempt
 			// by Evidence.Attempted.
 			sub.TomlAttemptedAt = attempted
 		} else {
 			sub.Toml = doc
+			// SEP-0001 lets a currency entry delegate to a separate per-currency
+			// document. Follow those links — one hop, bounded by
+			// sep1.MaxLinkedDocuments and subject to the same host policy — but
+			// only when the asset was not already claimed inline, which keeps
+			// the common case at one fetch.
+			if doc.LinkedCurrencies() > 0 && !doc.Claims(a.Code, a.Issuer) {
+				sub.TomlLinked = s.Toml.ResolveLinked(ctx, doc, a.Code, a.Issuer)
+			}
 		}
 
 		sub.BlockedURL = s.Expert.BlockedDomainURL(domain)

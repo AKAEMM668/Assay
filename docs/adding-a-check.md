@@ -61,7 +61,9 @@ type Subject struct {
 	Toml            *sep1.Doc  // nil if it did not resolve; carries its own FetchedAt
 	TomlURL         string
 	TomlErr         string     // why it did not, verbatim
+	TomlRefused     bool       // TomlErr is a host-policy refusal, not an outage
 	TomlAttemptedAt time.Time  // when the fetch was attempted
+	TomlLinked      *sep1.LinkedResolution // per-currency links followed; nil if none
 
 	Directory            *stellarexpert.DirectoryEntry
 	DirectoryURL         string
