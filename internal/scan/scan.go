@@ -114,7 +114,11 @@ func New() *Scanner {
 // page. When a source is unreachable the failure is recorded verbatim and
 // surfaced, never smoothed into a false negative.
 func (s *Scanner) Subject(ctx context.Context, a mechanics.Asset) (*mechanics.Subject, error) {
-	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC()}
+	network, err := s.resolveNetwork()
+	if err != nil {
+		return nil, err
+	}
+	sub := &mechanics.Subject{Asset: a, ScannedAt: time.Now().UTC(), Network: network}
 
 	stat, err := s.Horizon.Asset(ctx, a.Code, a.Issuer)
 	if err != nil {

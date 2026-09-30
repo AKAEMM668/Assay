@@ -263,9 +263,13 @@ compromised it.
   ([#40](https://github.com/use-assay/Assay/issues/40)) and check-set binding
   ([#42](https://github.com/use-assay/Assay/issues/42)) narrow this; nothing
   eliminates it except threshold attestation.
-- *It does not bind the network* ([#41](https://github.com/use-assay/Assay/issues/41))
-  — a testnet scan and a pubnet scan of same-code-different-network assets are
-  indistinguishable in the preimage until the SAC-address binding above.
+- *It does not bind the network* — closed. The preimage binds the network
+  passphrase under `assay-evidence-v3`
+  ([#41](https://github.com/use-assay/Assay/issues/41)), so a testnet scan and
+  a pubnet scan of the same code+issuer no longer hash identically, and the
+  scanner refuses to run when its network cannot be determined before any
+  fetch. See [contract-interface.md](contract-interface.md), "The preimage
+  binds the network".
 
 **Consequence for the deployment claim this design is allowed to make:** the
 testnet pipeline demonstrates and exercises the machinery. It does not make

@@ -305,10 +305,33 @@ one line after `accountability`:
 checks	ID,ID,...        (the checks the engine ran, sorted)
 ```
 
+A report that also names its network is written as `assay-evidence-v3`, which
+adds one line after `checks` — or after `accountability` when no check set is
+bound:
+
+```
+network	PASSPHRASE      (the ledger the facts were read from)
+```
+
+`PASSPHRASE` is the full Stellar network passphrase, not a short name:
+`Public Global Stellar Network ; September 2015` for pubnet, `Test SDF Network
+; September 2015` for testnet. The passphrase is the one network identifier the
+ecosystem already agrees on, and the value is fixed by the protocol — it is not
+configuration.
+
 Reports produced before check-set binding carry no `checks` line and are still
 written as `v1`, so an attestation already on-chain keeps reproducing its hash.
 A verifier reads a report with no bound check set as *unknown*, never as
-complete.
+complete. The same rule covers the network: reports produced before network
+binding carry no `network` line and keep their earlier encoding (`v1` if no
+check set is bound, `v2` otherwise), so every attestation written before this
+change still reproduces its hash. The version line names the newest binding the
+report carries, and each version's rendering is cumulative — a v3 report with
+no bound check set carries the network line but not the checks line.
+
+The committed vectors `network-bound-pubnet` and `network-bound-testnet` in
+`internal/attest/testdata/vectors` are byte-identical except for the network
+line and hash differently, which is the property this encoding exists for.
 
 with one `evidence` line per attributed claim, sorted bytewise. Inside any
 field, `\` becomes `\\`, tab becomes `\t`, newline `\n`, carriage return `\r`.
@@ -347,6 +370,26 @@ to compare.
 The check-set binding is a v2 rather than an amendment to v1 deliberately: an
 attestation written under v1 omitted the check set entirely, and re-hashing it
 under a changed v1 format would break every existing attestation.
+
+### The preimage binds the network
+
+An asset code and issuer can exist on two networks with different flags, and
+Assay's attestations are currently written to testnet while scanning pubnet —
+so before the v3 encoding, a pubnet scan and a testnet scan of the same
+identifier produced indistinguishable preimages, and an attestation could not
+prove which ledger it describes.
+
+The v3 encoding closes that: the network passphrase is part of the preimage, so
+the same facts read from two ledgers hash differently. `scan.Scanner` resolves
+the network before any fetch — from the Horizon base URL when it is an
+SDF-operated host, cross-checked against an explicit `Network` declaration —
+and refuses to scan when neither can name it, or when the two contradict. A
+misconfigured attester therefore fails at scan time instead of publishing
+pubnet facts under a testnet contract.
+
+An undeterminable network is an error, never a default, for the same reason an
+unread flag is `Unevaluated` rather than `Clear`: a guessed network name in a
+hashed field is a false attestation waiting to be written.
 
 ## Not done yet
 
