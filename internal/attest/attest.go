@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -37,6 +38,20 @@ const PreimageVersion = "assay-evidence-v1"
 // v1; only reports that ran through an engine with a check set use v2.
 const PreimageVersionCheckSet = "assay-evidence-v2"
 
+// PreimageVersionNetwork is the encoding used once a report binds the network
+// its facts were read from. It adds a `network` line carrying the full network
+// passphrase, so a pubnet scan and a testnet scan of the same CODE-ISSUER can
+// no longer produce indistinguishable preimages (#41): the same identifier can
+// exist on both networks with different flags, and Assay's attestations are
+// currently written to testnet while scanning pubnet, which made the ambiguity
+// concrete.
+//
+// Like the v2 bump, it is a new version rather than an edit: attestations on
+// chain under v1 and v2 must keep reproducing, so a report carrying no bound
+// network is still written under its earlier encoding, and only scans that
+// name their network hash as v3.
+const PreimageVersionNetwork = "assay-evidence-v3"
+
 // Params is one attest() call: the arguments, and nothing else.
 //
 // Asset is the classic identifier the scanner read. The contract keys on the
@@ -53,10 +68,14 @@ type Params struct {
 	// binds under v2. It is reported here so an attestation can be checked
 	// against the set a verifier expects without re-reading the report; empty
 	// means pre-binding, which is reported as unknown rather than complete.
-	Checks       []string `json:"checks,omitempty"`
-	EvidenceHash string   `json:"evidence_hash"`
-	ScannedAt    string   `json:"scanned_at"`
-	Preimage     string   `json:"preimage,omitempty"`
+	Checks []string `json:"checks,omitempty"`
+	// Network is the full network passphrase of the ledger the facts were read
+	// from, bound into the preimage under v3. Empty means the scan predates
+	// network binding, which is reported as such rather than guessed.
+	Network      string `json:"network,omitempty"`
+	EvidenceHash string `json:"evidence_hash"`
+	ScannedAt    string `json:"scanned_at"`
+	Preimage     string `json:"preimage,omitempty"`
 }
 
 // ErrInconsistent reports a report whose severity the contract would reject.
@@ -73,6 +92,70 @@ var ErrUndetermined = errors.New("attest: scan is undetermined, so there is noth
 // exists" apart from "a source was down". Like ErrUndetermined, it means there
 // is nothing to attest.
 var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so there is no severity to attest")
+
+// ProvenanceStatus represents the result of evaluating scanner version binding.
+type ProvenanceStatus string
+
+const (
+	ProvenanceValid   ProvenanceStatus = "valid"   // ProvenanceValid means the scanner version meets the caller's minimum.
+	ProvenanceInvalid ProvenanceStatus = "invalid" // Version below caller's minimum
+	ProvenanceUnknown ProvenanceStatus = "unknown" // No version recorded (pre-v2 attestation)
+)
+
+// ErrUnknownProvenance reports an attestation produced without version binding (pre-v2).
+var ErrUnknownProvenance = errors.New("attest: unknown provenance, attestation has no recorded scanner version")
+
+// ErrScannerDowngrade reports an attestation carrying a scanner version below the caller's minimum acceptable version.
+var ErrScannerDowngrade = errors.New("attest: scanner version is below caller's minimum acceptable version")
+
+// VerifyVersion checks whether a recorded scanner version meets a caller's minimum version requirement.
+// An absent (empty) recorded version is reported as unknown provenance rather than silently accepted or invalidated.
+func VerifyVersion(recordedVersion string, minVersion string) (ProvenanceStatus, error) {
+	recorded := strings.TrimSpace(recordedVersion)
+	if recorded == "" {
+		return ProvenanceUnknown, ErrUnknownProvenance
+	}
+	if CompareVersions(recorded, minVersion) < 0 {
+		return ProvenanceInvalid, fmt.Errorf("%w: recorded %q < minimum %q", ErrScannerDowngrade, recorded, minVersion)
+	}
+	return ProvenanceValid, nil
+}
+
+// CompareVersions compares two semver version strings (e.g. "v1.0.0", "1.0.0", "v0.1.0").
+// It returns -1 if v1 < v2, 0 if v1 == v2, and 1 if v1 > v2.
+func CompareVersions(v1, v2 string) int {
+	clean1 := strings.TrimPrefix(strings.TrimSpace(v1), "v")
+	clean2 := strings.TrimPrefix(strings.TrimSpace(v2), "v")
+
+	parts1 := strings.Split(clean1, ".")
+	parts2 := strings.Split(clean2, ".")
+
+	maxLen := len(parts1)
+	if len(parts2) > maxLen {
+		maxLen = len(parts2)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		var num1, num2 int
+		if i < len(parts1) {
+			if n, err := strconv.Atoi(parts1[i]); err == nil {
+				num1 = n
+			}
+		}
+		if i < len(parts2) {
+			if n, err := strconv.Atoi(parts2[i]); err == nil {
+				num2 = n
+			}
+		}
+		if num1 < num2 {
+			return -1
+		}
+		if num1 > num2 {
+			return 1
+		}
+	}
+	return 0
+}
 
 // ErrStale reports that the report is stale and cannot be attested as fresh.
 // Contract precedent: AttestationStale is error #2 in the example gate.
@@ -142,8 +225,9 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 		Flags:        flags,
 		Mechanics:    rep.MechanicNames,
 		Checks:       checks,
+		Network:      string(rep.Network),
 		EvidenceHash: hex.EncodeToString(sum[:]),
-		ScannedAt:    rep.ScannedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ScannedAt:    rep.ScannedAt.String(), // canonical whole-second UTC (issue #52)
 		Preimage:     pre,
 	}, nil
 }
@@ -152,7 +236,7 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 //
 // The format is line-oriented, tab-separated, LF-terminated, UTF-8:
 //
-//	assay-evidence-v1
+//	assay-evidence-v1                    (no check set, no scanner identity)
 //	asset	CODE-ISSUER
 //	severity	N
 //	base_severity	N
@@ -160,7 +244,21 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 //	mechanics	N
 //	accountability	NAME
 //	checks	ID,ID,...                (v2 only: checks the engine ran, sorted)
+//	network	PASSPHRASE               (v3 only: ledger the facts were read from)
 //	evidence	SOURCE	URL	CLAIM      (one per claim, sorted)
+//
+// A report that binds its check set adds one line after `accountability`
+// and is written as:
+//
+//	assay-evidence-v2
+//	checks	ID,ID,...                (checks the engine ran, sorted)
+//
+// A report that also carries a scanner identity adds the identity line
+// immediately after the version line and is written as:
+//
+//	assay-evidence-v3
+//	scanner	VERSION                  (module version, or "devel")
+//	checks	ID,ID,...
 //
 // Two decisions in here are worth stating outright.
 //
@@ -177,18 +275,28 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 // reordering checks does not change the hash for evidence that did not change.
 // Adding or removing a check does change it, by design: the v2 `checks` line
 // binds the check set, so a check removed from the engine cannot hide behind an
-// otherwise identical report.
+// otherwise identical report. From v3 on the `network` line names the ledger
+// the facts were read from, so the same identifier scanned on two networks
+// hashes differently.
 func Preimage(rep *mechanics.Report) string {
 	var b strings.Builder
 
 	b.WriteString(preimageVersion(rep))
 	b.WriteByte('\n')
+	// The scanner identity line is the v3 addition (issue #40): the hashed
+	// bytes name the code that produced the report, so two versions that
+	// classify differently can never hash identically. It comes right after
+	// the version line — identity before content.
+	if preimageHasScanner(rep) {
+		line(&b, "scanner", escape(ScannerIdentity))
+	}
 	line(&b, "asset", rep.Asset.String())
 	line(&b, "severity", strconv.FormatUint(uint64(rep.Severity), 10))
 	line(&b, "base_severity", strconv.FormatUint(uint64(rep.Base), 10))
 	line(&b, "escalated", strconv.FormatBool(rep.Escalated))
 	line(&b, "mechanics", strconv.FormatUint(uint64(rep.Mechanics), 10))
 	line(&b, "accountability", string(rep.Accountability))
+	line(&b, "checks", strings.Join(rep.Checks, ","))
 
 	// A bound check set is written as its own line so a verifier can name the
 	// checks a report is missing. Reports with no check set omit it entirely,
@@ -197,6 +305,15 @@ func Preimage(rep *mechanics.Report) string {
 		checks := append([]string(nil), rep.CheckSet...)
 		sort.Strings(checks)
 		line(&b, "checks", strings.Join(checks, ","))
+	}
+
+	// A bound network is written after the check set and before the evidence:
+	// the encoding is line-oriented, so a new field takes a fixed position and
+	// every earlier encoding must keep rendering byte-identically without it.
+	// Reports with no network omit the line entirely, keeping the exact v1/v2
+	// bytes an on-chain attestation was hashed under.
+	if rep.Network != "" {
+		line(&b, "network", string(rep.Network))
 	}
 
 	ev := make([]string, 0, len(rep.Evidence))
@@ -214,14 +331,31 @@ func Preimage(rep *mechanics.Report) string {
 
 // preimageVersion returns the encoding version a report is written under.
 //
-// A report that binds a check set uses v2; one that does not keeps the exact
-// v1 bytes, so an attestation written before check-set binding still
-// reproduces its hash.
+// The version names the newest binding the report carries: a report that names
+// its network is v3; one that binds only a check set is v2; one with neither
+// keeps the exact v1 bytes, so an attestation written before check-set or
+// network binding still reproduces its hash. Each version's rendering rules
+// are cumulative — a v3 report with no bound check set carries the network
+// line but not the checks line — so the version line always determines the
+// byte format completely.
 func preimageVersion(rep *mechanics.Report) string {
-	if len(rep.CheckSet) > 0 {
+	switch {
+	case rep.Network != "":
+		return PreimageVersionNetwork
+	case len(rep.CheckSet) > 0:
 		return PreimageVersionCheckSet
+	default:
+		return PreimageVersion
 	}
-	return PreimageVersion
+}
+
+// preimageHasScanner reports whether a report is written under the v3
+// encoding. Gating on ScannerBound rather than on the identity value keeps
+// the encoding decision a property of the REPORT: an operator who wants v1
+// bytes can produce a report without the binding, and a reader can tell from
+// the version line alone whether the bytes name their producer.
+func preimageHasScanner(rep *mechanics.Report) bool {
+	return rep.ScannerBound
 }
 
 // CheckSetStatus describes whether a report's bound check set can be compared
