@@ -161,7 +161,10 @@ not support.
 
 Tests must not require network access. Fetchers are interfaces; tests use
 fixtures captured from real responses under `internal/*/testdata/`. When you
-capture a new fixture, note the date and the URL it came from.
+capture a new fixture, follow
+[Capturing a fixture](docs/adding-a-check.md#capturing-a-fixture): it lists the
+files a subject is made of, the URL for each, how to record provenance, and what
+to do when a source errors at capture time.
 
 ### The reproducibility job
 
