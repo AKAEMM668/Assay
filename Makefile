@@ -148,6 +148,14 @@ refresh-fixture:
 eval-compare:
 	@go run ./cmd/eval -compare docs/eval-baseline.json $(if $(STRICT),-strict,)
 
+# Prints the confusion matrix over the labelled corpus, showing agreements
+# and disagreements per severity level and per check with undetermined as
+# its own outcome class. Sample size is printed with every result.
+# Precision and recall require -precision-recall and carry a sample-size
+# caveat.
+eval:
+	@go run ./cmd/eval -confusion -precision-recall
+
 clean:
 	rm -f $(BINARY) coverage.out coverage.html coverage.log
 	rm -rf $(CONTRACTS)/out
