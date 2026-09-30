@@ -144,6 +144,14 @@ to any string; a stellar.toml can list any code it likes. Matching on code alone
 would let any domain claim any asset — the exact impersonation this check
 exists to catch — so both must match.
 
+Two states are decided before any toml is fetched. **No `home_domain` at all**
+means nobody has claimed the asset: accountability is `unknown`, and the
+reasoning says so plainly — an absent claim is not a failed one. **A
+`home_domain` that disagrees with the curated directory's `domain`** is
+reported as `unverified` with both claims attributed to their source and URL,
+because a holder cannot tell a benign brand migration from an impersonation
+setup while the two sources simply contradict each other.
+
 Verification failures are reported verbatim, including the HTTP status. "We
 could not check" and "this is fine" are different answers and must never render
 the same.
@@ -154,13 +162,15 @@ StellarExpert endpoints did not, and a scan during an outage claimed reputation
 had been read when it had not. Fixed, with the history in
 [the attestation run](attestation-run.md#finding-1).
 
-The same rule applies to negatives. SEP-0001 permits a currency entry whose only
-field is `toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the
-declaration to a separate file. Such an entry carries no code or issuer, so it
-can never match. Assay does not follow those links yet, so when a toml contains
-them it reports the asset as **unconfirmed** rather than claiming the domain
-failed to name it — overstating a negative is the same class of error as
-overstating a positive. Following those links is not implemented yet.
+The same rule applies to negatives. SEP-0001 permits a currency entry carrying
+`toml="https://DOMAIN/.well-known/CURRENCY.toml"`, delegating the declaration to
+a separate file; the link need not be the entry's only field, so one entry may
+carry both a link and a code. Assay does not follow those links yet, so every
+entry that carries one and does not already declare this asset inline makes the
+answer **unconfirmed** rather than a claim that the domain failed to name it —
+overstating a negative is the same class of error as overstating a positive.
+An entry that does match inline is the claim itself and is not an unresolved
+link. Following those links is not implemented yet.
 
 **Cannot conclude:** that a verified issuer is honest. It establishes that a
 named party has published a claim, nothing more. A scammer can register a domain
@@ -176,38 +186,25 @@ Consumes StellarExpert's address directory (the data set standardized by
 SEP-0037) and malicious-domain blocklist. A `malicious`/`unsafe` directory tag
 or a blocklist hit escalates to `critical`.
 
-### The escalating tag set is explicit
-
-The tags that escalate are a named, documented set —
-`mechanics.AdverseDirectoryTags` — not an inline literal, so changing the
-vocabulary is a reviewed decision. StellarExpert's published directory
-vocabulary, captured 2026-09-27 from
-`GET https://api.stellar.expert/explorer/directory/tags` and
-[`github.com/stellar-expert/public-directory`](https://github.com/stellar-expert/public-directory)
-("Standard account tags"), is: `exchange`, `anchor`, `issuer`, `wallet`,
-`custodian`, `malicious`, `unsafe`, `personal`, `sdf`, `memo-required`,
-`airdrop`, `obsolete-inflation-pool`.
-
-Only two of those assert abuse or danger — `malicious` ("Account involved in
-theft/scam/spam/phishing") and `unsafe` ("Obsolete or potentially dangerous
-account") — so only those escalate. Every other tag describes what an account
-*is* (`issuer`, `anchor`, `custodian`, …) without asserting it is malicious,
-and must stay non-escalating. Treating a descriptive tag as adverse would
-punish exactly the well-known, legitimate accounts the directory exists to
-label.
-
-A tag **outside** that vocabulary is handled the way this project handles every
-other unknown: recorded as attributed evidence, and never escalated. Silently
-ignoring it would be a false negative that never announces itself, on the only
-axis that can raise a severity — the next adverse tag StellarExpert introduces
-would simply not be seen. Recording it makes the vocabulary extensible
-deliberately rather than guessed at scan time, and the unrecognised tag appears
-in the report so a reviewer can decide whether it belongs in the adverse set.
+Any configured [SEP-0042 asset list](asset-lists.md) is consumed here too, one
+`Evidence` entry per list, attributed by the list's own name and URL. A list can
+neither escalate nor lower the level: inclusion is not endorsement — the spec
+says so itself — and absence from a list is not an observation. When the lists
+disagree, or disagree with StellarExpert, the report says so and leaves it
+unresolved rather than averaging two providers into one verdict. A list that
+could not be read is recorded as failure evidence rather than as an absence, and
+does not mark the report `undetermined`, because it is not a source the verdict
+depends on.
 
 Everything it produces is `Evidence{Source, URL, Claim, RetrievedAt}` naming
 StellarExpert and the URL the claim came from. Attribution is structural: a
 check can only surface an outside claim by constructing an `Evidence`, so there
 is no code path that renders someone else's data as an Assay conclusion.
+
+`RetrievedAt` is the instant the source produced its answer. A scan may reuse a
+cached answer ([caching.md](caching.md)), and when it does this is the original
+fetch time rather than the time of the scan, so a report states a claim's true
+age instead of implying it was just checked.
 
 Assay does not maintain a scam list, a rating, or a domain blocklist. That layer
 exists, is actively curated, and is better than anything this project would
