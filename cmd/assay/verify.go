@@ -1,12 +1,11 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -16,175 +15,280 @@ import (
 	"github.com/use-assay/assay/internal/scan"
 )
 
-const registryAddress = "CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73"
+// This file implements `assay verify` (issue #39): re-scan the asset,
+// recompute the evidence hash, read the on-chain attestation, and report
+// whether they agree — with one command, instead of two commands and a human
+// comparing hex by eye.
+//
+// The outcome classes are distinct, because collapsing them is exactly the
+// dishonesty the command exists to prevent:
+//
+//	agree        the scan, the recomputed hash and the chain all match (exit 0)
+//	stale        they match, but the attestation is older than -max-age (exit 2)
+//	mismatch     one or more of severity/flags/evidence_hash differ (exit 1),
+//	             with the differing fields named
+//	absent       no attestation on chain for this asset (exit 3)
+//	unverifiable the scan is undetermined, so no verdict is possible (exit 4);
+//	             an undetermined scan NEVER reports agreement
+//
+// Staleness is only a failure when the caller supplies -max-age: without it
+// the command has no age to judge against and reports agreement regardless of
+// age, because freshness is a policy of the caller, not of the tool.
 
+// verifyOutcome is one of the five terminal states of a verification.
+type verifyOutcome string
+
+const (
+	outcomeAgree        verifyOutcome = "agree"
+	outcomeStale        verifyOutcome = "stale"
+	outcomeMismatch     verifyOutcome = "mismatch"
+	outcomeAbsent       verifyOutcome = "absent"
+	outcomeUnverifiable verifyOutcome = "unverifiable"
+)
+
+// exit codes, one per outcome class, so a script can branch on $?.
+const (
+	exitMismatch     = 1
+	exitStale        = 2
+	exitAbsent       = 3
+	exitUnverifiable = 4
+)
+
+// OnChainSafety mirrors the registry's get_safety return: the stored
+// attestation for one asset.
 type OnChainSafety struct {
 	Severity     uint32 `json:"severity"`
 	Flags        uint32 `json:"flags"`
 	EvidenceHash string `json:"evidence_hash"`
-	AttestedAt   uint64 `json:"attested_at"`
+	AttestedAt   int64  `json:"attested_at"`
 }
 
-func (o *OnChainSafety) UnmarshalJSON(b []byte) error {
-	type Alias OnChainSafety
-	aux := &struct {
-		*Alias
-		EvidenceHash interface{} `json:"evidence_hash"`
-	}{
-		Alias: (*Alias)(o),
-	}
-	if err := json.Unmarshal(b, &aux); err != nil {
-		return err
-	}
-	switch v := aux.EvidenceHash.(type) {
-	case string:
-		o.EvidenceHash = v
-	case []interface{}:
-		buf := make([]byte, len(v))
-		for i, val := range v {
-			if num, ok := val.(float64); ok {
-				buf[i] = byte(num)
-			}
-		}
-		o.EvidenceHash = hex.EncodeToString(buf)
-	}
-	return nil
+// registryReader reads the on-chain attestation for one asset. It is an
+// interface boundary rather than a concrete call so the outcome table test can
+// stub the chain; the production implementation is stellarRegistryReader.
+type registryReader func(asset mechanics.Asset) (*OnChainSafety, error)
+
+// scanFunc performs the live re-scan. Stubbed in tests, scan.New().Scan in
+// production.
+type scanFunc func(ctx context.Context, asset mechanics.Asset) (*mechanics.Report, error)
+
+// VerifyResult is the full verdict, for both the human line and -json.
+type VerifyResult struct {
+	Asset   string         `json:"asset"`
+	Outcome verifyOutcome  `json:"outcome"`
+	Fields  []string       `json:"fields,omitempty"`   // which fields mismatched
+	AgeSecs int64          `json:"age_secs,omitempty"` // attestation age, for stale
+	MaxAge  int64          `json:"max_age_secs,omitempty"`
+	Local   *LocalSide     `json:"local,omitempty"`
+	Chain   *OnChainSafety `json:"chain,omitempty"`
+	Detail  string         `json:"detail,omitempty"`
 }
 
-type RegistryReader interface {
-	Read(ctx context.Context, asset mechanics.Asset) (*OnChainSafety, error)
+// LocalSide is the freshly scanned side of the comparison.
+type LocalSide struct {
+	Severity     uint32   `json:"severity"`
+	SeverityName string   `json:"severity_name"`
+	Flags        uint32   `json:"flags"`
+	EvidenceHash string   `json:"evidence_hash"`
+	Checks       []string `json:"checks,omitempty"`
 }
 
-type CLIRegistryReader struct{}
+// verifyAsset is the whole comparison. It never reports agreement for an
+// undetermined scan: the undetermined check runs before anything else, and
+// FromReport would refuse the scan anyway.
+//
+// The error return is for infrastructure failures (scan errored, chain read
+// errored) — situations where no verdict exists at all. Every *verdict* —
+// agree, stale, mismatch, absent, unverifiable — is a VerifyResult, not an
+// error, because "the attestation disagrees" is a successful verification of
+// a bad attestation and a script must be able to distinguish the exit codes.
+func verifyAsset(ctx context.Context, asset mechanics.Asset, maxAge int64, now time.Time, doScan scanFunc, read registryReader) (*VerifyResult, error) {
+	res := &VerifyResult{Asset: asset.String()}
 
-func (c CLIRegistryReader) Read(ctx context.Context, asset mechanics.Asset) (*OnChainSafety, error) {
-	assetArg := fmt.Sprintf("%s:%s", asset.Code, asset.Issuer)
-	cmd := exec.CommandContext(ctx, "stellar", "contract", "id", "asset", "--asset", assetArg, "--network", "testnet")
-	out, err := cmd.Output()
+	report, err := doScan(ctx, asset)
 	if err != nil {
-		return nil, fmt.Errorf("derive SAC: %v", err)
+		return nil, fmt.Errorf("scan: %w", err)
 	}
-	sac := strings.TrimSpace(string(out))
 
-	cmd = exec.CommandContext(ctx, "stellar", "contract", "invoke", "--id", registryAddress, "--network", "testnet", "--", "get_safety", "--asset", sac)
-	out, err = cmd.Output()
+	if report.Undetermined {
+		res.Outcome = outcomeUnverifiable
+		res.Detail = fmt.Sprintf("scan is undetermined (%s); no verdict is possible",
+			strings.Join(report.UndeterminedChecks, ", "))
+		return res, nil
+	}
+
+	params, err := attest.FromReport(report)
 	if err != nil {
-		return nil, fmt.Errorf("invoke get_safety: %v (output: %s)", err, bytes.TrimSpace(out))
+		res.Outcome = outcomeUnverifiable
+		res.Detail = fmt.Sprintf("scan produced nothing attestable: %v", err)
+		return res, nil
 	}
-	
-	s := strings.TrimSpace(string(out))
-	if s == "null" || s == "None" || s == "" {
-		return nil, nil
+	res.Local = &LocalSide{
+		Severity:     params.Severity,
+		SeverityName: params.SeverityName,
+		Flags:        params.Flags,
+		EvidenceHash: params.EvidenceHash,
+		Checks:       params.Checks,
 	}
-	
-	var safety OnChainSafety
-	if err := json.Unmarshal([]byte(s), &safety); err != nil {
-		return nil, fmt.Errorf("parse on-chain safety %q: %v", s, err)
+
+	chain, err := read(asset)
+	if err != nil {
+		return nil, fmt.Errorf("read on-chain attestation: %w", err)
 	}
-	return &safety, nil
+	if chain == nil {
+		res.Outcome = outcomeAbsent
+		res.Detail = "no attestation on chain for this asset"
+		return res, nil
+	}
+	res.Chain = chain
+
+	// Compare the three attested fields by name, so a mismatch says which
+	// field moved instead of a generic "not equal".
+	var diff []string
+	if params.Severity != chain.Severity {
+		diff = append(diff, "severity")
+	}
+	if params.Flags != chain.Flags {
+		diff = append(diff, "flags")
+	}
+	if !strings.EqualFold(params.EvidenceHash, chain.EvidenceHash) {
+		diff = append(diff, "evidence_hash")
+	}
+	if len(diff) > 0 {
+		res.Outcome = outcomeMismatch
+		res.Fields = diff
+		res.Detail = "on-chain attestation does not match the live scan"
+		return res, nil
+	}
+
+	age := now.Unix() - chain.AttestedAt
+	if age < 0 {
+		age = 0
+	}
+	res.AgeSecs = age
+
+	// Staleness is judged only when the caller supplied an age. Otherwise a
+	// matching attestation agrees no matter how old it is.
+	if maxAge > 0 && age > maxAge {
+		res.Outcome = outcomeStale
+		res.MaxAge = maxAge
+		res.Detail = fmt.Sprintf("attestation matches but is %d seconds old (max %d)", age, maxAge)
+		return res, nil
+	}
+
+	res.Outcome = outcomeAgree
+	res.Detail = "on-chain attestation matches the live scan"
+	return res, nil
+}
+
+// stellarRegistryReader is the production registryReader: it derives the
+// asset's SAC id and simulates get_safety through the stellar CLI, exactly as
+// `make read` does. Simulation rather than submission means reading costs
+// nothing and needs no signature. CONTRACT_ID / NETWORK come from the
+// environment with the same defaults as the Makefile.
+func stellarRegistryReader(asset mechanics.Asset) (*OnChainSafety, error) {
+	contract := os.Getenv("ASSAY_CONTRACT_ID")
+	if contract == "" {
+		contract = "CBK4FBIHMDTXCUPE4E3ZDVSFJSCY5FJETTKNIQPN4LFJIKKIBLKIXQ73"
+	}
+	network := os.Getenv("ASSAY_NETWORK")
+	if network == "" {
+		network = "testnet"
+	}
+
+	sac, err := exec.Command("stellar", "contract", "id", "asset",
+		"--asset", asset.Code+":"+asset.Issuer, "--network", network).Output()
+	if err != nil {
+		return nil, fmt.Errorf("derive SAC id: %w", err)
+	}
+	out, err := exec.Command("stellar", "contract", "invoke",
+		"--id", contract,
+		"--source-account", "assay-attester",
+		"--network", network,
+		"--send=no",
+		"--", "get_safety", "--asset", strings.TrimSpace(string(sac)),
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("invoke get_safety: %w", err)
+	}
+
+	// The CLI prints the Option as either `null` (absent) or the Safety JSON.
+	var raw *OnChainSafety
+	if err := json.Unmarshal(bytesOr(out), &raw); err != nil {
+		return nil, fmt.Errorf("parse get_safety output: %w", err)
+	}
+	return raw, nil
+}
+
+func bytesOr(b []byte) []byte {
+	if len(strings.TrimSpace(string(b))) == 0 {
+		return []byte("null")
+	}
+	return b
 }
 
 func runVerify(args []string) error {
-	return runVerifyWithDependencies(context.Background(), args, scan.New(), CLIRegistryReader{}, time.Now)
-}
-
-type Scanner interface {
-	Scan(ctx context.Context, asset mechanics.Asset) (*mechanics.Report, error)
-}
-
-type verifyResult struct {
-	outcome string
-	msg     string
-}
-
-func (r verifyResult) Error() string { return r.msg }
-
-func (r verifyResult) ExitCode() int {
-	switch r.outcome {
-	case "unverifiable": return 2
-	case "absent":       return 3
-	case "mismatch":     return 4
-	case "stale":        return 5
-	default:             return 1
-	}
-}
-
-func runVerifyWithDependencies(ctx context.Context, args []string, scanner Scanner, reader RegistryReader, now func() time.Time) error {
 	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	maxAgeStr := fs.String("max-age", "", "treat attestation older than this duration as failure (e.g. 24h)")
+	maxAge := fs.Int64("max-age", 0, "treat an attestation older than this many seconds as stale (0 disables the age check)")
+	asJSON := fs.Bool("json", false, "print the verdict as JSON for scripting")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 1 {
 		return fmt.Errorf("verify takes exactly one asset (CODE-ISSUER)")
 	}
-
 	asset, err := scan.ParseAsset(fs.Arg(0))
 	if err != nil {
 		return err
 	}
 
-	var maxAge time.Duration
-	if *maxAgeStr != "" {
-		maxAge, err = time.ParseDuration(*maxAgeStr)
-		if err != nil {
-			return fmt.Errorf("invalid max-age: %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, verdict := verifyAsset(ctx, asset, *maxAge, time.Now(),
+		func(ctx context.Context, a mechanics.Asset) (*mechanics.Report, error) {
+			return scan.New().Scan(ctx, a)
+		},
+		stellarRegistryReader)
+	if verdict != nil {
+		return verdict
+	}
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(res); err != nil {
+			return err
+		}
+	} else {
+		fmt.Printf("%s: %s\n", strings.ToUpper(string(res.Outcome)), res.Asset)
+		if res.Detail != "" {
+			fmt.Println(res.Detail)
+		}
+		if len(res.Fields) > 0 {
+			fmt.Println("differing fields:", strings.Join(res.Fields, ", "))
+			if res.Local != nil {
+				fmt.Printf("local: severity=%d flags=%d evidence_hash=%s\n",
+					res.Local.Severity, res.Local.Flags, res.Local.EvidenceHash)
+			}
+			if res.Chain != nil {
+				fmt.Printf("chain: severity=%d flags=%d evidence_hash=%s attested_at=%d\n",
+					res.Chain.Severity, res.Chain.Flags, res.Chain.EvidenceHash, res.Chain.AttestedAt)
+			}
 		}
 	}
 
-	report, err := scanner.Scan(ctx, asset)
-	if err != nil {
-		return err
+	switch res.Outcome {
+	case outcomeAgree:
+		return nil
+	case outcomeStale:
+		os.Exit(exitStale)
+	case outcomeMismatch:
+		os.Exit(exitMismatch)
+	case outcomeAbsent:
+		os.Exit(exitAbsent)
+	case outcomeUnverifiable:
+		os.Exit(exitUnverifiable)
 	}
-
-	if report.Undetermined {
-		fmt.Printf("scan undetermined: %s could not complete\n", strings.Join(report.UndeterminedChecks, ", "))
-		return &verifyResult{"unverifiable", "scan undetermined"}
-	}
-
-	params, err := attest.FromReport(report)
-	if err != nil {
-		// e.g. ErrUnevaluated
-		fmt.Printf("scan unverifiable: %v\n", err)
-		return &verifyResult{"unverifiable", err.Error()}
-	}
-
-	onChain, err := reader.Read(ctx, asset)
-	if err != nil {
-		return fmt.Errorf("read registry: %v", err)
-	}
-
-	if onChain == nil {
-		fmt.Println("absent: no attestation found on-chain")
-		return &verifyResult{"absent", "no attestation on-chain"}
-	}
-
-	if onChain.Severity != params.Severity {
-		fmt.Printf("mismatch: severity differs (scan %d, on-chain %d)\n", params.Severity, onChain.Severity)
-		return &verifyResult{"mismatch", "severity differs"}
-	}
-	if onChain.Flags != params.Flags {
-		fmt.Printf("mismatch: flags differ (scan %d, on-chain %d)\n", params.Flags, onChain.Flags)
-		return &verifyResult{"mismatch", "flags differ"}
-	}
-	if onChain.EvidenceHash != params.EvidenceHash {
-		fmt.Printf("mismatch: evidence_hash differs (scan %s, on-chain %s)\n", params.EvidenceHash, onChain.EvidenceHash)
-		return &verifyResult{"mismatch", "evidence_hash differs"}
-	}
-
-	attestedAt := time.Unix(int64(onChain.AttestedAt), 0)
-	age := now().Sub(attestedAt)
-	staleMsg := ""
-	if maxAge > 0 && age > maxAge {
-		staleMsg = fmt.Sprintf(" (stale, age %s > %s)", age.Round(time.Second), maxAge)
-	}
-
-	fmt.Printf("agreement: severity %d, flags %d, hash %s, age %s%s\n", 
-		params.Severity, params.Flags, params.EvidenceHash[:8], age.Round(time.Second), staleMsg)
-
-	if maxAge > 0 && age > maxAge {
-		return &verifyResult{"stale", "attestation is stale"}
-	}
-
 	return nil
 }
