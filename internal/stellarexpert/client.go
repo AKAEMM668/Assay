@@ -22,8 +22,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"math/rand"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/use-assay/assay/internal/cache"
@@ -337,32 +341,117 @@ func lookup[T stamped](c *cache.Cache[T], key string, opts []LookupOption, fetch
 
 // get returns found=false on 404 rather than an error, because "not listed" is
 // a normal answer from these endpoints.
+//
+// Transient failures (429/5xx) are retried with bounded exponential backoff
+// and jitter, honouring Retry-After when the server advertises it. The retry
+// policy is keyed by status code so a 404 is never retried and the ledger
+// source (Horizon) is never touched here. If the retries exhaust, err is the
+// last transient error, which the caller records verbatim as evidence and
+// reports as undetermined.
 func (c *Client) get(ctx context.Context, target string, out any) (bool, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.UserAgent)
+	var lastErr error
+	opts := DefaultRetryOptions()
+	for attempt := 0; attempt < opts.Attempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
+		if err != nil {
+			return false, err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("User-Agent", c.UserAgent)
 
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return false, fmt.Errorf("stellarexpert: get %s: %w", target, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("stellarexpert: get %s: %w", target, err)
+			if attempt == opts.Attempts-1 {
+				return false, lastErr
+			}
+			t := opts.Backoff(attempt, 0)
+			if !wait(ctx, t) {
+				return false, ctx.Err()
+			}
+			continue
+		}
 
-	if resp.StatusCode == http.StatusNotFound {
-		return false, nil
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode == http.StatusNotFound {
+			return false, nil
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+			if attempt == opts.Attempts-1 {
+				return false, fmt.Errorf("stellarexpert: get %s: status %d", target, resp.StatusCode)
+			}
+			t := opts.Backoff(attempt, retryAfter)
+			if !wait(ctx, t) {
+				return false, ctx.Err()
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			lastErr = fmt.Errorf("stellarexpert: get %s: status %d", target, resp.StatusCode)
+			if attempt == opts.Attempts-1 {
+				return false, lastErr
+			}
+			t := opts.Backoff(attempt, 0)
+			if !wait(ctx, t) {
+				return false, ctx.Err()
+			}
+			continue
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody))
+		if err != nil {
+			lastErr = fmt.Errorf("stellarexpert: read %s: %w", target, err)
+			if attempt == opts.Attempts-1 {
+				return false, lastErr
+			}
+			t := opts.Backoff(attempt, 0)
+			if !wait(ctx, t) {
+				return false, ctx.Err()
+			}
+			continue
+		}
+		if err := json.Unmarshal(body, out); err != nil {
+			lastErr = fmt.Errorf("stellarexpert: decode %s: %w", target, err)
+			if attempt == opts.Attempts-1 {
+				return false, lastErr
+			}
+			t := opts.Backoff(attempt, 0)
+			if !wait(ctx, t) {
+				return false, ctx.Err()
+			}
+			continue
+		}
+		return true, nil
 	}
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("stellarexpert: get %s: status %d", target, resp.StatusCode)
+	return false, lastErr
+}
+
+// wait sleeps for d unless the context is cancelled or timed out first.
+func wait(ctx context.Context, d time.Duration) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, MaxBody))
+}
+
+// parseRetryAfter parses the Retry-After header, returning the delay in
+// seconds (the documented unit for this header) or zero when absent or
+// unparseable.
+func parseRetryAfter(s string) time.Duration {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if i, err := strconv.Atoi(s); err == nil {
+		return time.Duration(i) * time.Second
+	}
+	t, err := time.Parse(time.RFC1123, s)
 	if err != nil {
-		return false, fmt.Errorf("stellarexpert: read %s: %w", target, err)
+		return 0
 	}
-	if err := json.Unmarshal(body, out); err != nil {
-		return false, fmt.Errorf("stellarexpert: decode %s: %w", target, err)
-	}
-	return true, nil
+	return time.Until(t.UTC())
 }
