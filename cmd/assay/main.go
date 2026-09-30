@@ -63,6 +63,8 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   assay scan CODE-ISSUER          classify one asset and print the report as JSON
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
+  assay verify [-hash HEX] [-raw] [PREIMAGE]
+                                  check a canonical preimage against an evidence_hash
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr]             serve the HTTP API and UI
