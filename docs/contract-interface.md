@@ -326,14 +326,43 @@ attested, stale, too severe, or internally inconsistent.
 The safe answer is the default, so a caller who gets the arguments wrong blocks
 rather than admits.
 
+### A gate reads both severity and the bitset
+
+A gate that copies this example has to check **both** axes. They are not
+redundant, and the reader who takes one for the other is looking at the bug
+that shipped in the example gate.
+
+Severity is a total order and answers *how bad*; the bitset answers *which
+power*. Reputation escalation raises `severity` and sets `blocklisted` and must
+never set a capability bit — capability bits describe what the issuer *can do*,
+and a scam listing is not a capability. So a mask over capability bits cannot
+see escalation, by construction, and a severity ceiling cannot tell a freeze
+from a confiscation.
+
+`DOGE-GA22IDJNHUMC3XKUCCBFNTQIJOUBWINC5GCXHLJ2V6KZ3OWAXCULNQ7P` (the DOGE
+fixture in the eval corpus) is the concrete counter-example. It is attested at
+severity `4` (`SEVERITY_CRITICAL`) with flags `48`
+(`domain_unverified | blocklisted`) and **no capability bits at all**, because
+its issuer genuinely cannot freeze or confiscate. A gate masking only on
+`MECH_AUTH_REVOCABLE | MECH_CLAWBACK_ENABLED` (`6`) computes `48 & 6 == 0` and
+admits a known scam. Only the severity ceiling refuses it.
+
+The numbers are spelled out because the failure is easy to describe and easy to
+miss: `48 & 6 == 0` is exactly zero, and a gate reading a truthful bitset is
+satisfied by it. [integrating.md](integrating.md) works the same case through
+both checks, and the example gate carries the note next to `MAX_SEVERITY`. The
+history of the fix is
+[#26](https://github.com/use-assay/Assay/issues/26).
+
 ### Staleness is the caller's policy
 
 `attested_at` is exposed and `max_age_secs` is a parameter rather than a
 contract constant. Assay does not silently serve stale safety, and it does not
 guess how fresh is fresh enough — a DEX listing gate and a large settlement
 have very different tolerances. `max_age_secs = 0` opts out explicitly.
-Recommended bands with reasoning, the re-attestation cadence, and consumer
-guidance are in [freshness.md](freshness.md).
+`attested_at` is the authoritative timestamp for on-chain freshness decisions
+(see [timestamps.md](timestamps.md)); recommended bands with reasoning, the
+re-attestation cadence, and consumer guidance are in [freshness.md](freshness.md).
 
 [freshness.md](freshness.md) is the guidance for picking a value: what changes
 under an attestation, how fast (measured, not guessed), and defensible windows
@@ -390,10 +419,33 @@ one line after `accountability`:
 checks	ID,ID,...        (the checks the engine ran, sorted)
 ```
 
+A report that also names its network is written as `assay-evidence-v3`, which
+adds one line after `checks` — or after `accountability` when no check set is
+bound:
+
+```
+network	PASSPHRASE      (the ledger the facts were read from)
+```
+
+`PASSPHRASE` is the full Stellar network passphrase, not a short name:
+`Public Global Stellar Network ; September 2015` for pubnet, `Test SDF Network
+; September 2015` for testnet. The passphrase is the one network identifier the
+ecosystem already agrees on, and the value is fixed by the protocol — it is not
+configuration.
+
 Reports produced before check-set binding carry no `checks` line and are still
 written as `v1`, so an attestation already on-chain keeps reproducing its hash.
 A verifier reads a report with no bound check set as *unknown*, never as
-complete.
+complete. The same rule covers the network: reports produced before network
+binding carry no `network` line and keep their earlier encoding (`v1` if no
+check set is bound, `v2` otherwise), so every attestation written before this
+change still reproduces its hash. The version line names the newest binding the
+report carries, and each version's rendering is cumulative — a v3 report with
+no bound check set carries the network line but not the checks line.
+
+The committed vectors `network-bound-pubnet` and `network-bound-testnet` in
+`internal/attest/testdata/vectors` are byte-identical except for the network
+line and hash differently, which is the property this encoding exists for.
 
 with one `evidence` line per attributed claim, sorted bytewise. Inside any
 field, `\` becomes `\\`, tab becomes `\t`, newline `\n`, carriage return `\r`.
@@ -408,6 +460,34 @@ Excluding them means a verifier can re-scan and reproduce the hash exactly. The
 cost is that the hash cannot distinguish a fresh confirmation from a stale one
 — which is precisely why `attested_at` is stored separately and `is_safe` takes
 `max_age_secs` against it.
+
+**`undetermined` is deliberately excluded, decided in
+[#43](https://github.com/use-assay/Assay/issues/43).** The reasoning:
+
+- An undetermined report can never be attested — `attest.FromReport` refuses it
+  with `ErrUndetermined` — so the flag is constant (`false`) across every
+  report that has a hash at all. A field that never varies commits nothing; it
+  would add a line that carries no information in any preimage a verifier will
+  ever compare.
+- The exclusion is safe only because the refusal exists, so the guarantee rests
+  on `FromReport` refusing, not on the encoding. `TestUndeterminedReportIsRefused`
+  and `TestCapabilityClearWithReputationDownIsNotAttestable` (both in
+  `internal/attest/attest_test.go`) pin that refusal; if it is ever weakened,
+  the encoding decision must be revisited, because a hash over attestable
+  reports only is sound exactly as long as undetermined reports stay
+  unattestable.
+- Degraded scans are already visible in the hash through a stronger channel:
+  an unreachable source emits a `not retrievable: …` evidence claim, which is
+  hashed like any other. Two scans of the same asset, one with a source outage
+  and one without, already produce different hashes and different evidence
+  sets — there is nothing the flag would add that the evidence lines do not
+  already carry. `docs/attestation-run.md` records the corresponding live
+  observation: an undetermined KALE report would have hashed differently, and
+  the attestation was refused.
+- The corollary is a verifier rule, not just an implementation note: **never
+  compare the hash of a report carrying `undetermined: true`.** Such a report
+  has no evidence_hash — `FromReport` produces none — and an independent
+  reimplementer must refuse it the same way.
 
 The version line is inside the hash, so a future encoding change cannot produce
 bytes a verifier would silently compare against v1.
@@ -433,6 +513,26 @@ The check-set binding is a v2 rather than an amendment to v1 deliberately: an
 attestation written under v1 omitted the check set entirely, and re-hashing it
 under a changed v1 format would break every existing attestation.
 
+### The preimage binds the network
+
+An asset code and issuer can exist on two networks with different flags, and
+Assay's attestations are currently written to testnet while scanning pubnet —
+so before the v3 encoding, a pubnet scan and a testnet scan of the same
+identifier produced indistinguishable preimages, and an attestation could not
+prove which ledger it describes.
+
+The v3 encoding closes that: the network passphrase is part of the preimage, so
+the same facts read from two ledgers hash differently. `scan.Scanner` resolves
+the network before any fetch — from the Horizon base URL when it is an
+SDF-operated host, cross-checked against an explicit `Network` declaration —
+and refuses to scan when neither can name it, or when the two contradict. A
+misconfigured attester therefore fails at scan time instead of publishing
+pubnet facts under a testnet contract.
+
+An undeterminable network is an error, never a default, for the same reason an
+unread flag is `Unevaluated` rather than `Clear`: a guessed network name in a
+hashed field is a false attestation waiting to be written.
+
 ## Not done yet
 
 - **Single admin.** One key can write or revoke any attestation. A production
@@ -440,7 +540,7 @@ under a changed v1 format would break every existing attestation.
   options are compared, with a recommendation, in
   [multi-attestor.md](multi-attestor.md).
 - **No re-attestation schedule.** Nothing refreshes an attestation when an
-  issuer's flags change. Freshness is entirely the caller's problem, via
+  issuer's flags change. Freshness is entirely the caller's policy via
   `attested_at` and `max_age_secs`.
 - **TTL is extended on write only.** `init`, `attest`, `attest_many` and
   `revoke` extend the contract instance and code to the network maximum, and the

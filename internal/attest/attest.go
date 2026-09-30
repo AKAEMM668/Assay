@@ -37,6 +37,20 @@ const PreimageVersion = "assay-evidence-v1"
 // v1; only reports that ran through an engine with a check set use v2.
 const PreimageVersionCheckSet = "assay-evidence-v2"
 
+// PreimageVersionNetwork is the encoding used once a report binds the network
+// its facts were read from. It adds a `network` line carrying the full network
+// passphrase, so a pubnet scan and a testnet scan of the same CODE-ISSUER can
+// no longer produce indistinguishable preimages (#41): the same identifier can
+// exist on both networks with different flags, and Assay's attestations are
+// currently written to testnet while scanning pubnet, which made the ambiguity
+// concrete.
+//
+// Like the v2 bump, it is a new version rather than an edit: attestations on
+// chain under v1 and v2 must keep reproducing, so a report carrying no bound
+// network is still written under its earlier encoding, and only scans that
+// name their network hash as v3.
+const PreimageVersionNetwork = "assay-evidence-v3"
+
 // Params is one attest() call: the arguments, and nothing else.
 //
 // Asset is the classic identifier the scanner read. The contract keys on the
@@ -53,10 +67,14 @@ type Params struct {
 	// binds under v2. It is reported here so an attestation can be checked
 	// against the set a verifier expects without re-reading the report; empty
 	// means pre-binding, which is reported as unknown rather than complete.
-	Checks       []string `json:"checks,omitempty"`
-	EvidenceHash string   `json:"evidence_hash"`
-	ScannedAt    string   `json:"scanned_at"`
-	Preimage     string   `json:"preimage,omitempty"`
+	Checks []string `json:"checks,omitempty"`
+	// Network is the full network passphrase of the ledger the facts were read
+	// from, bound into the preimage under v3. Empty means the scan predates
+	// network binding, which is reported as such rather than guessed.
+	Network      string `json:"network,omitempty"`
+	EvidenceHash string `json:"evidence_hash"`
+	ScannedAt    string `json:"scanned_at"`
+	Preimage     string `json:"preimage,omitempty"`
 }
 
 // ErrInconsistent reports a report whose severity the contract would reject.
@@ -142,6 +160,7 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 		Flags:        flags,
 		Mechanics:    rep.MechanicNames,
 		Checks:       checks,
+		Network:      string(rep.Network),
 		EvidenceHash: hex.EncodeToString(sum[:]),
 		ScannedAt:    rep.ScannedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		Preimage:     pre,
@@ -160,6 +179,7 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 //	mechanics	N
 //	accountability	NAME
 //	checks	ID,ID,...                (v2 only: checks the engine ran, sorted)
+//	network	PASSPHRASE               (v3 only: ledger the facts were read from)
 //	evidence	SOURCE	URL	CLAIM      (one per claim, sorted)
 //
 // Two decisions in here are worth stating outright.
@@ -177,7 +197,9 @@ func FromReport(rep *mechanics.Report) (Params, error) {
 // reordering checks does not change the hash for evidence that did not change.
 // Adding or removing a check does change it, by design: the v2 `checks` line
 // binds the check set, so a check removed from the engine cannot hide behind an
-// otherwise identical report.
+// otherwise identical report. From v3 on the `network` line names the ledger
+// the facts were read from, so the same identifier scanned on two networks
+// hashes differently.
 func Preimage(rep *mechanics.Report) string {
 	var b strings.Builder
 
@@ -199,6 +221,15 @@ func Preimage(rep *mechanics.Report) string {
 		line(&b, "checks", strings.Join(checks, ","))
 	}
 
+	// A bound network is written after the check set and before the evidence:
+	// the encoding is line-oriented, so a new field takes a fixed position and
+	// every earlier encoding must keep rendering byte-identically without it.
+	// Reports with no network omit the line entirely, keeping the exact v1/v2
+	// bytes an on-chain attestation was hashed under.
+	if rep.Network != "" {
+		line(&b, "network", string(rep.Network))
+	}
+
 	ev := make([]string, 0, len(rep.Evidence))
 	for _, e := range rep.Evidence {
 		ev = append(ev, "evidence\t"+escape(e.Source)+"\t"+escape(e.URL)+"\t"+escape(e.Claim))
@@ -214,14 +245,22 @@ func Preimage(rep *mechanics.Report) string {
 
 // preimageVersion returns the encoding version a report is written under.
 //
-// A report that binds a check set uses v2; one that does not keeps the exact
-// v1 bytes, so an attestation written before check-set binding still
-// reproduces its hash.
+// The version names the newest binding the report carries: a report that names
+// its network is v3; one that binds only a check set is v2; one with neither
+// keeps the exact v1 bytes, so an attestation written before check-set or
+// network binding still reproduces its hash. Each version's rendering rules
+// are cumulative — a v3 report with no bound check set carries the network
+// line but not the checks line — so the version line always determines the
+// byte format completely.
 func preimageVersion(rep *mechanics.Report) string {
-	if len(rep.CheckSet) > 0 {
+	switch {
+	case rep.Network != "":
+		return PreimageVersionNetwork
+	case len(rep.CheckSet) > 0:
 		return PreimageVersionCheckSet
+	default:
+		return PreimageVersion
 	}
-	return PreimageVersion
 }
 
 // CheckSetStatus describes whether a report's bound check set can be compared
