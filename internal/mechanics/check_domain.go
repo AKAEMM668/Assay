@@ -115,8 +115,11 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 			domain, s.TomlErr)
 		f.Evidence = append(f.Evidence, Evidence{
 			Source: "stellar.toml",
-			URL:    s.TomlURL,
-			Claim:  "not retrievable: " + s.TomlErr,
+			// The fetch never produced a document, so there is no final
+			// location: URL and RequestedURL are the same here.
+			URL:          s.TomlURL,
+			RequestedURL: s.TomlURL,
+			Claim:        "not retrievable: " + s.TomlErr,
 			// The toml never answered, so this carries the attempt time, not a
 			// retrieval time — and says so programmatically.
 			RetrievedAt: NewCanonicalTime(s.TomlAttemptedAt),
@@ -150,7 +153,12 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				domain, s.Asset, linked)
 			f.Evidence = append(f.Evidence, Evidence{
 				Source: "stellar.toml",
-				URL:    s.Toml.URL,
+				// URL is the post-redirect location the document was read from;
+				// RequestedURL is what home_domain pointed at. Recording both is
+				// what lets an auditor tell a claim made by the requested host
+				// from one served by a host a redirect moved the fetch to.
+				URL:          s.Toml.URL,
+				RequestedURL: s.TomlURL,
 				Claim: fmt.Sprintf(
 					"CURRENCIES lists %d entries, none matching %s inline; %d are links not followed",
 					len(s.Toml.Currencies), s.Asset, linked),
@@ -168,8 +176,9 @@ func (c DomainCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				"is asserted by the issuer only and is not reciprocated.",
 			domain, s.Asset)
 		f.Evidence = append(f.Evidence, Evidence{
-			Source: "stellar.toml",
-			URL:    s.Toml.URL,
+			Source:       "stellar.toml",
+			URL:          s.Toml.URL,
+			RequestedURL: s.TomlURL,
 			Claim: fmt.Sprintf("CURRENCIES lists %d entries, none matching %s",
 				len(s.Toml.Currencies), s.Asset),
 			RetrievedAt: NewCanonicalTime(s.Toml.FetchedAt),

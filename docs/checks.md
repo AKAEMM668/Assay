@@ -172,6 +172,47 @@ overstating a negative is the same class of error as overstating a positive.
 An entry that does match inline is the claim itself and is not an unresolved
 link. Following those links is not implemented yet.
 
+### Redirects
+
+`.well-known/stellar.toml` may answer with a redirect. Because `home_domain` is
+attacker-controlled free text, a redirect is part of the claim surface rather
+than an implementation detail, and two rules bound it.
+
+**The chain is bounded at five hops** (`sep1.MaxRedirects`). net/http follows
+ten by default; the number is stated explicitly here because a redirect chain is
+attacker-controlled and the bound is part of the security argument, not a copied
+default.
+
+**A redirect may not leave the requested host's namespace.** The target must be
+the requested host itself or a subdomain of it, compared case-insensitively on
+the hostname. This admits the ordinary `circle.com` → `www.circle.com` move
+while refusing a hop to an unrelated host: without this rule a hostile
+`home_domain` could redirect the fetch to any host it likes and have that host's
+document recorded as this domain's claim, defeating the reciprocity the check
+exists to establish. The test is deliberately one-directional — a requested
+subdomain may not climb to a parent domain, which may be a shared host whose
+content another party controls.
+
+A same-site redirect is **not hidden from the audit**. Evidence records
+`requested_url` — the well-known location derived from `home_domain` — alongside
+`url`, the location the document was actually read from, so a reader can tell
+whether the claim came from the requested host or from a subdomain a redirect
+moved it to. `requested_url` is outside the `evidence_hash` preimage and `url`
+keeps its original per-path meaning, so no attestation already on chain moves;
+the field is new information, not a change to what was hashed.
+
+Concretely, the only redirect observed in the on-chain corpus is `circle.com` →
+`www.circle.com` (see [the attestation run](attestation-run.md)); the policy
+admits it, so USDC's evidence bytes and `evidence_hash` are unchanged. The other
+nine attestations were written from direct, non-redirecting fetches. Excluding
+`requested_url` from the preimage is what keeps adding it from moving any of
+them; a run that *did* move an existing hash here would be a bug, not an
+acceptable cost.
+
+**Exceeding the bound, or a refused cross-host redirect, is an error naming the
+final host** — not a silent 404 and not a claim. A document served by a
+disallowed host is never treated as this domain's claim.
+
 **Cannot conclude:** that a verified issuer is honest. It establishes that a
 named party has published a claim, nothing more. A scammer can register a domain
 and publish a valid toml in ten minutes; that is precisely why this sets

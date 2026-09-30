@@ -368,6 +368,57 @@ func NewFetcher() *Fetcher {
 	}
 }
 
+// CheckRedirect is the redirect policy every Fetcher installs. It does two
+// things, both deliberate:
+//
+//   - It bounds the chain at MaxRedirects rather than following whatever the
+//     client's default is.
+//   - It refuses a redirect that leaves the requested host's namespace. A
+//     stellar.toml is a claim made by the domain in home_domain; if a redirect
+//     could relocate the fetch to an unrelated host, that host's document would
+//     be recorded as this domain's claim, and home_domain is attacker-
+//     controlled free text. The final host is named in the error so a reader can
+//     see where the fetch was being sent.
+//
+// The policy test is one-directional: the target must be the requested host or
+// a subdomain of it. That admits the common apex-to-www move (circle.com →
+// www.circle.com) while refusing a hop from a subdomain up to a parent domain,
+// which may be a shared host whose content another party controls. See
+// docs/checks.md for the reasoning.
+func CheckRedirect(req *http.Request, via []*http.Request) error {
+	if len(via) >= MaxRedirects {
+		return fmt.Errorf("stopped after %d redirects", MaxRedirects)
+	}
+	// net/http always supplies the chain so far; refuse rather than index an
+	// empty slice if this is ever called directly.
+	if len(via) == 0 {
+		return fmt.Errorf("redirect with no preceding request")
+	}
+	origin := via[0].URL.Hostname()
+	final := req.URL.Hostname()
+	if !withinRequestedSite(origin, final) {
+		return fmt.Errorf("cross-host redirect from %s to %s", origin, final)
+	}
+	return nil
+}
+
+// withinRequestedSite reports whether final is origin itself or a subdomain of
+// it, comparing labels case-insensitively and ignoring the root-trailing dot.
+func withinRequestedSite(origin, final string) bool {
+	origin = normalizeHost(origin)
+	final = normalizeHost(final)
+	if origin == "" || final == "" {
+		return false
+	}
+	return final == origin || strings.HasSuffix(final, "."+origin)
+}
+
+// normalizeHost lowercases a host and strips a single trailing root dot, so
+// "Circle.COM." and "circle.com" compare equal.
+func normalizeHost(h string) string {
+	return strings.ToLower(strings.TrimSuffix(h, "."))
+}
+
 // URLFor returns the SEP-1 well-known location for a domain.
 func URLFor(domain string) string {
 	return "https://" + strings.TrimSuffix(domain, "/") + "/.well-known/stellar.toml"

@@ -90,6 +90,13 @@ func TestExhaustSep1InfiniteBodyIsBounded(t *testing.T) {
 // made and the timeout is what the test actually measures.
 func TestExhaustSep1NonTerminatingResponseIsBounded(t *testing.T) {
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Declare a body larger than anything this handler will ever write, so
+		// the response can never be read as a complete zero-byte document.
+		// Without it the server may finalize the flushed response just before
+		// the client's timeout fires, and the fetch would race between an error
+		// and a clean empty EOF — the assertion below must not depend on which
+		// side of that race wins.
+		w.Header().Set("Content-Length", "1024")
 		w.WriteHeader(http.StatusOK)
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
