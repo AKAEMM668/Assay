@@ -58,13 +58,15 @@ carries an explicit, evaluated position on legitimate clawback use. See
 
 | Document | What's in it |
 | --- | --- |
-| [docs/architecture.md](docs/architecture.md) | Package map, data-flow diagram, and the no-I/O-in-checks rule |
+| [docs/glossary.md](docs/glossary.md) | Every state Assay reports — severity, accountability, verdict state, `undetermined` — and the state each is most often confused with |
 | [docs/cli.md](docs/cli.md) | The `assay` binary: scan, attestation, history, serve |
 | [docs/severity-model.md](docs/severity-model.md) | The judgment layer: severity levels, the legitimate-use carve-out, and why |
 | [docs/checks.md](docs/checks.md) | Each mechanic Assay checks, and what it can and cannot conclude |
 | [docs/contract-interface.md](docs/contract-interface.md) | `get_safety(asset)` design and the `evidence_hash` encoding |
 | [docs/integrating.md](docs/integrating.md) | How your contract calls `get_safety` and gates on both severity and the bitset |
+| [docs/trust.md](docs/trust.md) | What you are trusting: verifiable facts vs. relayed claims, and consequence matrix |
 | [docs/deployment.md](docs/deployment.md) | Deployed addresses, attested assets, transaction hashes |
+| [docs/attester-key.md](docs/attester-key.md) | Attester key custody, loss/compromise response, rotation limits |
 | [docs/verifying.md](docs/verifying.md) | How a third party verifies an attestation end to end, without reading the source |
 | [docs/attestation-run.md](docs/attestation-run.md) | Every asset scanned, what each check returned, and what the run exposed about the scanner |
 | [docs/history.md](docs/history.md) | The observation history API: what is retained, for how long, and what an empty history means |
@@ -110,3 +112,4 @@ Four things are worth knowing before you rely on any of it:
 ## License
 
 Apache-2.0. See [LICENSE](LICENSE).
+- [Temporal Trust Model](docs/temporal.md)
