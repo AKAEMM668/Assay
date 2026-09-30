@@ -17,13 +17,13 @@ func TestHistoryJSON(t *testing.T) {
 				Source:      "horizon",
 				URL:         "https://horizon.stellar.org/assets?asset_code=AQUA&asset_issuer=GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA",
 				Claim:       "issuer flags: auth_required=false auth_revocable=false auth_immutable=false auth_clawback_enabled=false",
-				RetrievedAt: now,
+				RetrievedAt: mechanics.NewCanonicalTime(now),
 			},
 			{
 				Source:      "stellar.expert/directory",
 				URL:         "https://api.stellar.expert/explorer/directory/GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA",
 				Claim:       "listed as \"Zeam.Money\" (domain \"zeam.money\", tags: )",
-				RetrievedAt: now.Add(1 * time.Hour),
+				RetrievedAt: mechanics.NewCanonicalTime(now.Add(1 * time.Hour)),
 			},
 		},
 	}
@@ -78,7 +78,7 @@ func TestHistoryRaw(t *testing.T) {
 				Source:      "horizon",
 				URL:         "https://horizon.stellar.org/assets?asset_code=AQUA&asset_issuer=GBNZILSTVQZ4R7IKQDGHYGY2QXL5QOFJYQMXPKWRRM5PAV7Y4M67AQUA",
 				Claim:       "issuer flags: auth_required=false auth_revocable=false auth_immutable=false auth_clawback_enabled=false",
-				RetrievedAt: now,
+				RetrievedAt: mechanics.NewCanonicalTime(now),
 			},
 		},
 	}

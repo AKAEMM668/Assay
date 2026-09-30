@@ -201,6 +201,39 @@ func TestABIDriftConfiscationMask(t *testing.T) {
 	}
 }
 
+// TestABIDriftCapabilityMask extends the #15 drift check to the #34 mask: the
+// capability/power bits must be selectable by name on BOTH sides and the two
+// sides must agree on the value, or a consumer picking the mask from the wrong
+// language's definition silently selects a different set of powers.
+func TestABIDriftCapabilityMask(t *testing.T) {
+	src, err := os.ReadFile(contractSourcePath(t))
+	if err != nil {
+		t.Fatalf("read contract source: %v", err)
+	}
+	rust := parseRustU32Consts(t, string(src))
+
+	got, ok := rust["CAPABILITY_MASK"]
+	if !ok {
+		t.Fatal("rust CAPABILITY_MASK missing")
+	}
+	if got != uint32(mechanics.CapabilityMask) {
+		t.Errorf("CAPABILITY_MASK drift: rust=%#x go=%#x",
+			got, uint32(mechanics.CapabilityMask))
+	}
+
+	// The mask is exactly the three power bits and nothing else: a reported
+	// bit leaking in (or a power bit left out) is the #26 failure shape.
+	want := uint32(mechanics.MechAuthRequired | mechanics.MechAuthRevocable |
+		mechanics.MechClawbackEnabled)
+	if uint32(mechanics.CapabilityMask) != want {
+		t.Errorf("CapabilityMask = %#x, want the three power bits %#x",
+			uint32(mechanics.CapabilityMask), want)
+	}
+	if mechanics.CapabilityMask&^(mechanics.MechAuthRequired|mechanics.MechAuthRevocable|mechanics.MechClawbackEnabled) != 0 {
+		t.Errorf("CapabilityMask carries reported-only bits: %#x", uint32(mechanics.CapabilityMask))
+	}
+}
+
 func trailingZeros(x uint32) int {
 	if x == 0 {
 		return -1

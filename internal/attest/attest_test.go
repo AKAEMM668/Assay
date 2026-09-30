@@ -20,12 +20,12 @@ func report(mut func(*mechanics.Report)) *mechanics.Report {
 		Severity:       mechanics.Clear,
 		Base:           mechanics.Clear,
 		Accountability: mechanics.AccountabilityVerified,
-		ScannedAt:      time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC),
+		ScannedAt:      mechanics.NewCanonicalTime(time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)),
 		Evidence: []mechanics.Evidence{{
 			Source:      "horizon",
 			URL:         "https://horizon.stellar.org/assets?asset_code=AQUA",
 			Claim:       "issuer flags: auth_required=false",
-			RetrievedAt: time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC),
+			RetrievedAt: mechanics.NewCanonicalTime(time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)),
 		}},
 	}
 	if mut != nil {
@@ -134,8 +134,8 @@ func TestRetrievalTimeDoesNotChangeTheHash(t *testing.T) {
 		t.Fatalf("FromReport: %v", err)
 	}
 	later, err := attest.FromReport(report(func(r *mechanics.Report) {
-		r.ScannedAt = r.ScannedAt.Add(72 * time.Hour)
-		r.Evidence[0].RetrievedAt = r.Evidence[0].RetrievedAt.Add(72 * time.Hour)
+		r.ScannedAt = mechanics.NewCanonicalTime(r.ScannedAt.Time().Add(72 * time.Hour))
+		r.Evidence[0].RetrievedAt = mechanics.NewCanonicalTime(r.Evidence[0].RetrievedAt.Time().Add(72 * time.Hour))
 	}))
 	if err != nil {
 		t.Fatalf("FromReport: %v", err)
