@@ -21,9 +21,16 @@ import (
 //go:embed ui/index.html
 var uiFS embed.FS
 
+// Scanner describes what the API server needs from a scanner.
+type Scanner interface {
+	ScanWithHolder(ctx context.Context, a mechanics.Asset, holder string) (*mechanics.Report, error)
+}
+
 // Server serves scan results and recorded observation history.
 type Server struct {
-	Scanner *scan.Scanner
+// Server serves scan results and recorded observation history.
+type Server struct {
+	Scanner Scanner
 	// History stores one observation per successful scan. It is a pointer so a
 	// caller can replace the default in-memory store with a file-backed one
 	// (history.Open) or with a pre-seeded store in a test.
@@ -147,16 +154,17 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record the observation before answering, so the scan that produced a
-	// report is the same event that enters history. A failure to record it is
-	// logged and never fails the scan: the caller asked for a classification,
-	// and losing history is not the same as losing the scan.
-	if s.History != nil {
+if s.History != nil {
 		if err := s.History.Append(temporal.ObservationFromReport(report)); err != nil {
 			s.Log.Error("history append failed", "asset", asset.String(), "err", err)
 		}
 	}
 
+	if report.Undetermined {
+		w.Header().Set("X-Assay-Undetermined", "true")
+	} else {
+		w.Header().Set("X-Assay-Undetermined", "false")
+	}
 	writeJSON(w, http.StatusOK, report)
 }
 
