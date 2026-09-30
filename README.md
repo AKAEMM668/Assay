@@ -76,7 +76,7 @@ carries an explicit, evaluated position on legitimate clawback use. See
 | [docs/freshness.md](docs/freshness.md) | How old an attestation may be: measured flag-change rates and window guidance per use class |
 | [docs/asset-lists.md](docs/asset-lists.md) | Consuming SEP-0042 Stellar Asset Lists as a second curation source, and why listing is never a safety signal |
 | [docs/adding-a-check.md](docs/adding-a-check.md) | How to write a new mechanic check |
-| [docs/debugging-a-verdict.md](docs/debugging-a-verdict.md) | Step-by-step workflow for investigating a surprising verdict |
+| [docs/pipeline.md](docs/pipeline.md) | The full ledger-fact to on-chain-verdict path for a single asset |
 
 ## Status
 

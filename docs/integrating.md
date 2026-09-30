@@ -297,24 +297,17 @@ recorded in [deployment.md](deployment.md).
 
 ## Verifying an attestation yourself
 
-You do not have to take the stored severity on faith. Re-scan the asset and
-recompute the hash:
+You do not have to take the stored severity on faith. `assay verify` automates the check by re-scanning the asset, recomputing the hash, reading the on-chain attestation, and reporting whether they agree:
 
 ```sh
-$ ./assay attestation -raw USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
-3	6	ca9b13a66f3a0a4b43d66dea29a505658447e08eee200d2bdb5e66aa1065fb4d
-
-$ make read ASSET=USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
-{"attested_at":...,"evidence_hash":"ca9b13a6...65fb4d","flags":6,"severity":3}
+$ ./assay verify USDZ-GAKTLPC4ZV37SSCITQ5IS5AQ4WPF4CF4VZJQPPAROSGXMYOATF5U6XPR
+agreement: severity 3, flags 6, hash ca9b13a6, age 4h12m0s
 ```
 
-`assay attestation -preimage` prints the exact bytes hashed, so the check can be
-reimplemented in any language. The encoding is specified in
-[contract-interface.md](contract-interface.md).
+The command supports a `-max-age` flag (e.g. `-max-age=24h`) to treat stale attestations as a failure.
+If the hashes differ, it reports the specific disagreeing field and exits non-zero. The mismatch means either the asset's sources changed since the attestation or the attestation does not correspond to the evidence it claims. The hash cannot tell you which — that is what `attested_at` and your own re-scan are for.
 
-If the hashes differ, either the asset's sources changed since the attestation
-or the attestation does not correspond to the evidence it claims. The hash
-cannot tell you which — that is what `attested_at` and your own re-scan are for.
+`assay attestation -preimage` prints the exact bytes hashed, so the check can be reimplemented in any language. The encoding is specified in [contract-interface.md](contract-interface.md).
 
 This is the two-command sketch. [verifying.md](verifying.md) is the full
 procedure: deriving the address for the network, reading the attestation, the

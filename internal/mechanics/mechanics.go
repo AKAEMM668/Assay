@@ -554,6 +554,7 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	}
 
 	for _, c := range e.Checks {
+		rep.Checks = append(rep.Checks, c.ID())
 		f, err := c.Run(ctx, s)
 		if err != nil {
 			return nil, fmt.Errorf("check %s: %w", c.ID(), err)
@@ -613,5 +614,6 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	sort.SliceStable(rep.Findings, func(i, j int) bool {
 		return rep.Findings[i].Severity > rep.Findings[j].Severity
 	})
+	sort.Strings(rep.Checks)
 	return rep, nil
 }

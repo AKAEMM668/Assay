@@ -1,6 +1,7 @@
 package attest_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -90,6 +91,7 @@ func TestPreimageMatchesTheDocumentedEncoding(t *testing.T) {
 		"escalated\tfalse",
 		"mechanics\t0",
 		"accountability\tverified",
+		"checks\t",
 		// Evidence lines sorted bytewise: horizon before stellar.expert.
 		"evidence\thorizon\thttps://horizon.stellar.org/assets?asset_code=AQUA\t" + escaped,
 		"evidence\tstellar.expert/directory\thttps://api.stellar.expert/explorer/directory/" + rep.Asset.Issuer + "\t" + `listed as "AQUA Issuer" on aqua.network`,
@@ -225,10 +227,10 @@ func TestSeparatorsInClaimsCannotForgeALine(t *testing.T) {
 	if strings.Contains(crafted.Preimage, "\nevidence\thorizon\thttps://evil") {
 		t.Fatalf("a claim injected a forged evidence line:\n%s", crafted.Preimage)
 	}
-	// Version, six header fields, one evidence line: the crafted claim must not
+	// Version, seven header fields, one evidence line: the crafted claim must not
 	// have bought itself an extra record.
-	if lines := strings.Count(crafted.Preimage, "\n"); lines != 8 {
-		t.Fatalf("expected 8 preimage lines, got %d:\n%s", lines, crafted.Preimage)
+	if lines := strings.Count(crafted.Preimage, "\n"); lines != 9 {
+		t.Fatalf("expected 9 preimage lines, got %d:\n%s", lines, crafted.Preimage)
 	}
 }
 
@@ -305,5 +307,50 @@ func TestCapabilityClearWithReputationDownIsNotAttestable(t *testing.T) {
 		r.UndeterminedChecks = []string{"reputation"}
 	})); err == nil {
 		t.Fatal("a clear severity reached without reading reputation was attestable")
+	}
+}
+
+type stubCheck struct {
+	id string
+}
+
+func (s stubCheck) ID() string       { return s.id }
+func (s stubCheck) Describe() string { return s.id }
+func (s stubCheck) Run(ctx context.Context, sub *mechanics.Subject) (mechanics.Finding, error) {
+	return mechanics.Finding{Check: s.id}, nil
+}
+
+func TestCheckIdentityChangesTheHash(t *testing.T) {
+	ctx := context.Background()
+	sub := &mechanics.Subject{}
+
+	e2 := &mechanics.Engine{Checks: []mechanics.Check{stubCheck{"a"}, stubCheck{"b"}}}
+	rep2, _ := e2.Run(ctx, sub)
+	// mock unevaluated/undetermined errors by making them valid
+	rep2.Severity = mechanics.Clear
+	rep2.Base = mechanics.Clear
+	rep2.Mechanics = mechanics.MechAuthRequired
+	params2, _ := attest.FromReport(rep2)
+
+	e3 := &mechanics.Engine{Checks: []mechanics.Check{stubCheck{"a"}, stubCheck{"b"}, stubCheck{"c"}}}
+	rep3, _ := e3.Run(ctx, sub)
+	rep3.Severity = mechanics.Clear
+	rep3.Base = mechanics.Clear
+	rep3.Mechanics = mechanics.MechAuthRequired
+	params3, _ := attest.FromReport(rep3)
+
+	if params2.EvidenceHash == params3.EvidenceHash {
+		t.Errorf("a two-check engine and a three-check engine produced the same hash: %s", params2.EvidenceHash)
+	}
+
+	e2Reordered := &mechanics.Engine{Checks: []mechanics.Check{stubCheck{"b"}, stubCheck{"a"}}}
+	rep2Reordered, _ := e2Reordered.Run(ctx, sub)
+	rep2Reordered.Severity = mechanics.Clear
+	rep2Reordered.Base = mechanics.Clear
+	rep2Reordered.Mechanics = mechanics.MechAuthRequired
+	params2Reordered, _ := attest.FromReport(rep2Reordered)
+
+	if params2.EvidenceHash != params2Reordered.EvidenceHash {
+		t.Errorf("check order affected the hash:\na, b: %s\nb, a: %s", params2.EvidenceHash, params2Reordered.EvidenceHash)
 	}
 }

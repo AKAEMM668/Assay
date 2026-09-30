@@ -296,6 +296,7 @@ func Preimage(rep *mechanics.Report) string {
 	line(&b, "escalated", strconv.FormatBool(rep.Escalated))
 	line(&b, "mechanics", strconv.FormatUint(uint64(rep.Mechanics), 10))
 	line(&b, "accountability", string(rep.Accountability))
+	line(&b, "checks", strings.Join(rep.Checks, ","))
 
 	// A bound check set is written as its own line so a verifier can name the
 	// checks a report is missing. Reports with no check set omit it entirely,
