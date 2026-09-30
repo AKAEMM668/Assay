@@ -237,6 +237,47 @@ type AssetListSignal struct {
 	Err string
 }
 
+// AssetListSignal is one configured SEP-0042 list's result for the asset under
+// scan, attributed to the list that published it: its own name, its own URL and
+// its own retrieval time, never merged with another source's answer.
+//
+// It is evidence only. SEP-0042 states that "inclusion of any particular asset
+// in a list should not be considered as endorsement or recommendation of any
+// kind", so presence never moves severity in either direction — see
+// docs/severity-model.md: severity is capability-only, and absence from a list
+// is not an observation at all.
+type AssetListSignal struct {
+	// Name and Provider are the list's own self-description, and identify the
+	// source in the report. Both are empty when the list could not be read, in
+	// which case only URL identifies it.
+	Name     string
+	Provider string
+	// URL is where the list was fetched from, so the reader can re-fetch
+	// exactly what was read.
+	URL string
+	// Version and Network are recorded as published and are not checked
+	// against the ledger.
+	Version string
+	Network string
+
+	// Entry is the list's own entry for this asset, populated only when a match
+	// was found in a list that was actually read.
+	Entry *assetlist.Asset
+	// Listed is meaningful only when Err is empty: a list that could not be
+	// read gave no answer, and no answer must never render as absence.
+	Listed bool
+
+	// FetchedAt is when this list was retrieved — the time of the fetch, not
+	// the time of the scan.
+	FetchedAt time.Time
+	// AttemptedAt is when the list was asked. Always set, so failure evidence
+	// always has a time to carry.
+	AttemptedAt time.Time
+	// Err records why the list could not be read, verbatim. Empty means it was
+	// read.
+	Err string
+}
+
 // HomeDomain returns the issuer's advertised home_domain, if any.
 func (s *Subject) HomeDomain() string {
 	if s.Issuer == nil {
