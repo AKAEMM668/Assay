@@ -3,6 +3,7 @@ package mechanics
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -50,6 +51,10 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 	// separate from "answered, not listed" because collapsing the two is
 	// exactly how a scanner reports an outage as a clean bill of health.
 	var unreachable []string
+	// unrecognised names directory tags outside Assay's documented vocabulary.
+	// They never escalate, but they are recorded so the vocabulary can be
+	// extended deliberately rather than an adverse tag being silently missed.
+	var unrecognised []string
 
 	if s.DirectoryErr != "" {
 		unreachable = append(unreachable, "the curated directory")
@@ -84,11 +89,34 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 				s.Directory.Name, s.Directory.Domain, tags),
 			RetrievedAt: NewCanonicalTime(s.DirectoryFetchedAt),
 		})
-		for _, tag := range []string{"malicious", "unsafe"} {
+		// Escalation is driven by the named, documented adverse set rather than
+		// an inline literal, so the vocabulary is a reviewed artifact.
+		for _, tag := range AdverseDirectoryTags {
 			if s.Directory.HasTag(tag) {
 				flagged = append(flagged, fmt.Sprintf("the curated directory tags the issuer %q", tag))
 				break
 			}
+		}
+		// A tag outside the documented vocabulary is not silently dropped. An
+		// unrecognised tag could be adverse, and ignoring it would be a false
+		// negative that never announces itself, on the only axis that can raise
+		// a severity. It is recorded as attributed evidence and left
+		// non-escalating, so the vocabulary is extended deliberately rather
+		// than guessed at scan time.
+		for _, tag := range s.Directory.Tags {
+			if classifyDirectoryTag(tag) != directoryTagUnknown {
+				continue
+			}
+			unrecognised = append(unrecognised, tag)
+			f.Evidence = append(f.Evidence, Evidence{
+				Source: "stellar.expert/directory",
+				URL:    s.DirectoryURL,
+				Claim: fmt.Sprintf(
+					"unrecognised directory tag %q: not in Assay's documented vocabulary, "+
+						"so it did not affect severity; review it so the vocabulary can be updated deliberately",
+					tag),
+				RetrievedAt: s.DirectoryFetchedAt,
+			})
 		}
 	}
 
