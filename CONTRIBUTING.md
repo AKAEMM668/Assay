@@ -20,6 +20,10 @@ them through. If you find yourself writing a scam heuristic over domain
 names, stop — that layer already exists and is better maintained than
 anything we would write.
 
+## Debugging a verdict
+
+If Assay reports something unexpected for an asset, see [docs/debugging-a-verdict.md](docs/debugging-a-verdict.md) for a step-by-step workflow to trace the verdict to its cause and determine whether the discrepancy is in the live source ("the source says so") or in Assay's code.
+
 ## Adding a check
 
 Full guide: [docs/adding-a-check.md](docs/adding-a-check.md).
@@ -48,6 +52,13 @@ make cover    # per-package coverage table, lowest first
 make run      # start the API on :8080
 ```
 
+Shell scripts are checked with ShellCheck at warning severity in CI. Run the
+same check locally from the repository root:
+
+```sh
+find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './.git/*' -print0 | xargs -0 shellcheck -S warning
+```
+
 The Soroban side, which needs the [stellar CLI](https://developers.stellar.org/docs/build/smart-contracts/getting-started/setup):
 
 ```sh
@@ -59,6 +70,45 @@ make deploy-testnet   # upload + deploy, prints the new contract ID
 make attest ASSET=CODE-ISSUER   # scan live and write the result on-chain
 make read   ASSET=CODE-ISSUER   # read it back with get_safety
 ```
+
+### Contract toolchain
+
+Reproducing a wasm hash recorded in [docs/deployment.md](docs/deployment.md)
+takes the same toolchain the deployment was built with, not just the same
+source. Three versions decide the optimized bytes:
+
+| Component | Recorded build |
+| --- | --- |
+| `stellar` CLI | 27.1.0 |
+| Rust target | `wasm32v1-none` |
+| `soroban-sdk` | 27.0.5 |
+
+**The Rust compiler channel is not pinned.** There is no
+`assay-contracts/rust-toolchain.toml` yet ([#127](https://github.com/use-assay/Assay/issues/127)),
+so `rustup` selects whichever channel happens to be installed, and the
+compiler version changes the optimized bytes: the same source under the same
+`stellar` CLI hashes differently on rustc 1.95.0 and rustc 1.98.1. Until that
+pin exists, a build here cannot be expected to reproduce a hash recorded in
+[docs/deployment.md](docs/deployment.md), and `make verify-wasm` reports
+`unpinned` and exits 2 rather than guessing — see
+[docs/deployment.md](docs/deployment.md#does-the-source-still-build-what-is-deployed).
+Check the environment before any contract work:
+
+```sh
+stellar --version && rustup target list --installed && make build-contract
+```
+
+`stellar --version` must print 27.1.0 and the target list must contain
+`wasm32v1-none`; `make build-contract` then writes the optimized wasm to
+`assay-contracts/out/`. A mismatch on any of the three changes the optimized
+bytes, and therefore the hash, even when the contract source is byte for byte
+identical — the CLI also runs the wasm optimizer and checks the exported
+interface, so it is not a pass-through to `cargo build`. If
+`sha256sum assay-contracts/out/assay_safety_registry.wasm` does not match the
+[recorded wasm hash](docs/deployment.md#live-addresses), check these versions
+before suspecting a source change — and note that a mismatch is only evidence
+once the compiler is pinned, since an unpinned one changes the hash on its
+own.
 
 `make attest` derives every value from a live scan via `assay attestation`.
 Never hand-write a severity, a bitset, or an evidence hash into a transaction —
@@ -126,7 +176,10 @@ not support.
 
 Tests must not require network access. Fetchers are interfaces; tests use
 fixtures captured from real responses under `internal/*/testdata/`. When you
-capture a new fixture, note the date and the URL it came from.
+capture a new fixture, follow
+[Capturing a fixture](docs/adding-a-check.md#capturing-a-fixture): it lists the
+files a subject is made of, the URL for each, how to record provenance, and what
+to do when a source errors at capture time.
 
 ### The reproducibility job
 
@@ -186,6 +239,40 @@ ASSAY_STELLAREXPERT_URL=http://127.0.0.1:1 ./scripts/reproducibility.sh --attemp
 
 Two overrides exist for debugging; neither changes what the scanner checks,
 only where it fetches from.
+
+### Mutation testing: decision recorded
+
+**Decision (2026-09-27, issue #110): do not adopt mutation tooling in CI.
+The manual catalogue is the standing practice.**
+
+Mutation testing measures whether the safety tests actually constrain the
+code — nothing else does. The baseline catalogue ([docs/mutation-catalogue.md](docs/mutation-catalogue.md))
+proves the practice has teeth: of 14 safety-critical mutations, 13 were
+cought and one (R-M4) was a real test gap, now closed. So the technique is
+adopted; only automation is declined. The evaluation:
+
+| Option | Runtime cost (measured) | Verdict |
+| --- | --- | --- |
+| **Do nothing** (no mutation measurement at all) | 0 | Rejected — the baseline found a gap the suite did not know about; skipping the practice is how the next one ships |
+| **Manual catalogue** (current) | ~45–60 min of contributor time per run, no dependency | **Adopted as standing practice** |
+| **CI-integrated tooling** (`go-mutesting`-style Go mutation runners, `cargo-mutants` for the contracts) | even at one mutation per invocation, the full catalogue is ≥14 package builds + test runs; measured suite times (0.6 s Go, 0.4 s registry) put the floor near 10–20 min per PR, with the real cost several times that because mutation runners recompile per mutant | Declined for CI |
+
+The reasoning, in the project's own terms: the catalogue found 13/14 the
+first time it was run, which is the argument for keeping the practice. It is
+declined for CI because a mutation check is inherently slow and its failures
+are noisy — a surviving mutant often means "add a test", not "your change is
+broken", and a red-for-that-reason check on every PR becomes a check everyone
+learns to ignore. The project's dependency rule also applies and is recorded:
+any third-party mutation framework would need a decision that it is
+warranted, and the manual procedure is reproducible from
+[docs/mutation-catalogue.md](docs/mutation-catalogue.md) with no dependency
+at all. **Advisory, not blocking, and not over any package: the catalogue
+runs when safety-critical branches change, and its result is the PR
+description's job to record.**
+
+If the corpus of safety-critical branches grows to the point that the manual
+run is skipped in practice, reopen the decision — a standing measurement that
+nobody runs is worse than none.
 
 ## Commits
 
