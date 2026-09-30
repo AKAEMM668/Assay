@@ -15,6 +15,10 @@ import (
 
 	"github.com/use-assay/assay/internal/api"
 	"github.com/use-assay/assay/internal/attest"
+	// Aliased because this file already has a local history() for the CLI's
+	// evidence view; this package is the persisted observation store behind the
+	// HTTP endpoint, a different thing.
+	historystore "github.com/use-assay/assay/internal/history"
 	"github.com/use-assay/assay/internal/mechanics"
 	"github.com/use-assay/assay/internal/scan"
 )
@@ -26,8 +30,37 @@ func main() {
 	}
 }
 
-func usage() {
-	fmt.Fprint(os.Stderr, `usage:
+// commandDeps are the process-level dependencies the subcommands use. They are
+// grouped so dispatch, flag handling and output formatting can be tested
+// without a network or a real server. The CLI is how the attestation pipeline
+// is driven — `make attest` shells out to `assay attestation -raw` and pipes
+// the output into a transaction — so its parsing and formatting is a contract
+// worth pinning.
+type commandDeps struct {
+	stdout io.Writer
+	stderr io.Writer
+	// scan fetches and classifies one asset. It is injected so tests never
+	// touch the network.
+	scan func(context.Context, mechanics.Asset) (*mechanics.Report, error)
+	// serve starts the HTTP API. It is injected so dispatch can be tested
+	// without binding a port.
+	serve func([]string, *slog.Logger) error
+}
+
+// defaultDeps wires the real production sources.
+func defaultDeps() commandDeps {
+	return commandDeps{
+		stdout: os.Stdout,
+		stderr: os.Stderr,
+		scan: func(ctx context.Context, a mechanics.Asset) (*mechanics.Report, error) {
+			return scan.New().Scan(ctx, a)
+		},
+		serve: runServe,
+	}
+}
+
+func usage(w io.Writer) {
+	fmt.Fprint(w, `usage:
   assay scan CODE-ISSUER          classify one asset and print the report as JSON
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay verify [-hash HEX] [-raw] [PREIMAGE]
@@ -35,39 +68,57 @@ func usage() {
   assay history [-guarantee] [-raw] CODE-ISSUER
                                   print the asset's observation history
   assay serve [-addr]             serve the HTTP API and UI
+
+Every command that scans accepts:
+  -cache-directory-ttl D   reuse a curated directory answer for D (0 disables)
+  -cache-blocklist-ttl D   reuse a blocklist answer for D (0 disables)
+  -no-cache                re-fetch curated sources on every scan
+  assay serve [-addr] [-history PATH]
+                                  serve the HTTP API and UI
+
+Commands that scan also accept:
+  -asset-lists URL[,URL...]       SEP-0042 Stellar Asset Lists to consume
+                                  (repeatable). No list is used by default.
 `)
 }
 
-func run(args []string) error {
+func run(args []string) error { return runWith(args, defaultDeps()) }
+
+// runWith is the testable entry point: it performs dispatch only, consuming
+// output writers and a scan function from d.
+func runWith(args []string, d commandDeps) error {
 	if len(args) == 0 {
-		usage()
+		usage(d.stderr)
 		return fmt.Errorf("no command given")
 	}
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	log := slog.New(slog.NewTextHandler(d.stderr, nil))
 
 	switch args[0] {
 	case "scan":
-		return runScan(args[1:])
+		return runScan(args[1:], d)
 	case "attestation":
-		return runAttestation(args[1:])
-	case "verify":
-		return runVerify(args[1:])
+		return runAttestation(args[1:], d)
 	case "history":
-		return runHistory(args[1:])
+		return runHistory(args[1:], d)
 	case "serve":
-		return runServe(args[1:], log)
+		return d.serve(args[1:], log)
 	default:
-		usage()
+		usage(d.stderr)
 		return fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
 func runScan(args []string) error {
-	if len(args) != 1 {
+	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
 		return fmt.Errorf("scan takes exactly one asset (CODE-ISSUER)")
 	}
-	asset, err := scan.ParseAsset(args[0])
+	asset, err := scan.ParseAsset(fs.Arg(0))
 	if err != nil {
 		return err
 	}
@@ -75,14 +126,57 @@ func runScan(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
+}
+
+// assetListFlags registers the -asset-lists flag shared by every command that
+// scans, and returns a constructor for the URLs it names.
+//
+// No list is a default, and that is deliberate: shipping one would hard-code a
+// provider's curation as authoritative for every scan, and would add evidence
+// to every report — which changes every evidence_hash, including for assets
+// already attested. A caller opts in, and each list it names is attributed
+// separately by name and URL. See docs/asset-lists.md.
+func assetListFlags(fs *flag.FlagSet) func() []string {
+	var urls listFlag
+	fs.Var(&urls, "asset-lists",
+		"SEP-0042 Stellar Asset List URLs to consume, comma-separated or repeated; none by default")
+	return func() []string {
+		return append([]string(nil), urls...)
+	}
+}
+
+// newScanner returns a production Scanner configured to consult the given
+// SEP-0042 asset lists.
+func newScanner(lists []string) *scan.Scanner {
+	sc := scan.New()
+	sc.AssetListURLs = lists
+	return sc
+}
+
+// listFlag collects repeated -asset-lists values as well as comma-separated
+// ones, so both forms work:
+//
+//	-asset-lists=a,b -asset-lists=c
+//	-asset-lists a -asset-lists b
+type listFlag []string
+
+func (l *listFlag) String() string { return strings.Join(*l, ",") }
+
+func (l *listFlag) Set(v string) error {
+	for _, part := range strings.Split(v, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			*l = append(*l, p)
+		}
+	}
+	return nil
 }
 
 // runAttestation prints the arguments of an on-chain attest() call for one
@@ -92,8 +186,9 @@ func runScan(args []string) error {
 // the attester key, and keeping derivation separate from submission means the
 // numbers going on-chain can be inspected — and the evidence hash independently
 // recomputed from -preimage — before a key ever touches them.
-func runAttestation(args []string) error {
+func runAttestation(args []string, d commandDeps) error {
 	fs := flag.NewFlagSet("attestation", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
 	preimage := fs.Bool("preimage", false, "include the canonical bytes evidence_hash commits to")
 	raw := fs.Bool("raw", false, "print only the attest() arguments, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -110,119 +205,34 @@ func runAttestation(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
+	// Derivation happens before any output. An undetermined scan has no
+	// attestation to print, and nothing may reach stdout that a pipeline could
+	// mistake for values.
 	params, err := attest.FromReport(report)
 	if err != nil {
 		return err
 	}
 
 	if *raw {
-		_, err := fmt.Printf("%d\t%d\t%s\n", params.Severity, params.Flags, params.EvidenceHash)
+		_, err := fmt.Fprintf(d.stdout, "%d\t%d\t%s\n", params.Severity, params.Flags, params.EvidenceHash)
 		return err
 	}
 	if !*preimage {
 		params.Preimage = ""
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(params)
 }
 
-// runVerify checks a canonical preimage against the evidence_hash an
-// attestation carries on chain.
-//
-// It is the other half of `attestation -preimage`, and it exists because the
-// alternative is two commands and a human comparing 64 hex characters by eye.
-// Nothing here reaches the network: the preimage names its own asset, and the
-// hash either matches these bytes or it does not.
-//
-// The preimage is read from a file, or from stdin when the argument is omitted
-// or `-`, so one that was published elsewhere can be piped straight in:
-//
-//	assay attestation -preimage CODE-ISSUER | jq -r .preimage | assay verify -hash 0x...
-//
-// With no -hash it prints the hash the bytes produce, which is the value to
-// compare against what the registry stores.
-func runVerify(args []string) error {
-	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
-	hash := fs.String("hash", "", "the evidence_hash to verify against, hex (0x optional)")
-	asset := fs.String("asset", "", "also require the preimage to be for this CODE-ISSUER")
-	raw := fs.Bool("raw", false, "print only the recomputed evidence_hash")
-	quiet := fs.Bool("quiet", false, "print nothing; report the verdict through the exit status")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() > 1 {
-		return fmt.Errorf("verify takes at most one preimage file (use - for stdin)")
-	}
-
-	pre, err := readPreimage(fs.Args())
-	if err != nil {
-		return err
-	}
-
-	v, err := attest.VerifyPreimage(pre, *hash)
-
-	// An unreadable header is a note rather than a failure: the bytes are still
-	// worth hashing, and refusing to would let a cosmetic problem hide a real
-	// mismatch. Notes go to stderr so stdout stays machine-readable.
-	if !*quiet && !*raw {
-		for _, n := range v.Notes {
-			fmt.Fprintln(os.Stderr, "assay verify:", n)
-		}
-	}
-
-	if err != nil {
-		// A mismatch is the one case where both hashes are the whole answer, so
-		// print what was compared before returning the failure.
-		if *raw {
-			fmt.Println(v.Computed)
-		} else if !*quiet {
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			if encErr := enc.Encode(v); encErr != nil {
-				return encErr
-			}
-		}
-		return err
-	}
-
-	if *asset != "" && !strings.EqualFold(v.Asset, *asset) {
-		return fmt.Errorf("preimage is for %q, not %q", v.Asset, *asset)
-	}
-
-	if *raw {
-		fmt.Println(v.Computed)
-		return nil
-	}
-	if *quiet {
-		return nil
-	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
-}
-
-// readPreimage reads the canonical bytes from a file, or from stdin when no
-// file was named or `-` was given.
-//
-// The exact bytes are what the hash covers, so nothing is trimmed or normalised
-// on the way in: doing so would verify a different document from the one the
-// attester published.
-func readPreimage(args []string) ([]byte, error) {
-	if len(args) == 0 || args[0] == "-" {
-		return io.ReadAll(os.Stdin)
-	}
-	return os.ReadFile(args[0])
-}
-
-func runHistory(args []string) error {
+func runHistory(args []string, d commandDeps) error {
 	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
 	guarantee := fs.Bool("guarantee", false, "exit non-zero when there is no history")
 	raw := fs.Bool("raw", false, "print only the history, tab-separated, for scripting")
 	if err := fs.Parse(args); err != nil {
@@ -240,7 +250,7 @@ func runHistory(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := scan.New().Scan(ctx, asset)
+	report, err := newScanner(assetLists()).Scan(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -249,14 +259,7 @@ func runHistory(args []string) error {
 
 	if len(hist) == 0 {
 		msg := "assay history: no observations for " + asset.String()
-		if *raw {
-			fmt.Println(msg)
-			if *guarantee {
-				return fmt.Errorf("no history")
-			}
-			return nil
-		}
-		fmt.Println(msg)
+		fmt.Fprintln(d.stdout, msg)
 		if *guarantee {
 			return fmt.Errorf("no history")
 		}
@@ -265,12 +268,12 @@ func runHistory(args []string) error {
 
 	if *raw {
 		for _, h := range hist {
-			fmt.Printf("%s\t%s\t%s\t%s\n", h.Asset, h.Severity, h.Transition, h.Reason)
+			fmt.Fprintf(d.stdout, "%s\t%s\t%s\t%s\n", h.Asset, h.Severity, h.Transition, h.Reason)
 		}
 		return nil
 	}
 
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(hist)
 }
@@ -320,6 +323,7 @@ var candidateTransitions = []string{
 	"blocked",
 	"unverified",
 	"not retrievable",
+	"not present",
 	"credits",
 	"claims",
 	"borrow",
@@ -336,16 +340,38 @@ type historyEntry struct {
 
 func runServe(args []string, log *slog.Logger) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
+	assetLists := assetListFlags(fs)
 	addr := fs.String("addr", ":8080", "listen address")
+	historyPath := fs.String("history", "",
+		"path to the observation history log (JSON Lines); empty keeps history in memory only")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
+	// The cache lives as long as the server process, which is where it earns
+	// its keep: repeated scans of the same issuer reuse an answer instead of
+	// re-reading a free service on every request.
 	srv := &http.Server{
 		Addr:              *addr,
-		Handler:           api.NewServer(log).Handler(),
+		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
+	srv := api.NewServer(log)
+	// The server is where a list configuration matters most: every scan it
+	// serves consults the same configured lists, attributed the same way, and
+	// records them in the observation history like any other evidence.
+	srv.Scanner = newScanner(assetLists())
+	if *historyPath != "" {
+		store, err := historystore.Open(*historyPath)
+		if err != nil {
+			return err
+		}
+		srv.History = store
+	}
+
+	httpSrv := &http.Server{
+		Addr:              *addr,
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	log.Info("assay listening", "addr", *addr)
-	return srv.ListenAndServe()
+	log.Info("assay listening", "addr", *addr, "history", *historyPath)
+	return httpSrv.ListenAndServe()
 }
