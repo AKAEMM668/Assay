@@ -182,10 +182,3 @@ func hashOf(t *testing.T, rep *mechanics.Report) string {
 	}
 	return params.EvidenceHash
 }
-
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return s[:i]
-	}
-	return s
-}

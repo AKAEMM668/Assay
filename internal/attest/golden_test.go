@@ -133,8 +133,25 @@ func TestGoldenFilesHaveCanonicalLineEndings(t *testing.T) {
 		if bytes.HasSuffix(raw, []byte("\n\n")) {
 			t.Errorf("%s ends with a blank line: the canonical encoding terminates the last line exactly once", e)
 		}
-		if !strings.HasPrefix(string(raw), attest.PreimageVersion+"\n") {
-			t.Errorf("%s does not start with the version line %q", e, attest.PreimageVersion)
+		if !hasAnyPreimageVersion(string(raw)) {
+			t.Errorf("%s does not start with a known version line (v1, v2 or v3)", e)
 		}
 	}
+}
+
+// hasAnyPreimageVersion reports whether s begins with one of the version lines
+// the encoding has ever produced (v1, v2 or v3). The line-ending fixture check
+// must accept every version, because the vector directory also holds the
+// network-bound (v3) preimages.
+func hasAnyPreimageVersion(s string) bool {
+	for _, v := range []string{
+		attest.PreimageVersion,
+		attest.PreimageVersionCheckSet,
+		attest.PreimageVersionNetwork,
+	} {
+		if strings.HasPrefix(s, v+"\n") {
+			return true
+		}
+	}
+	return false
 }
