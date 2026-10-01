@@ -26,11 +26,11 @@ func main() {
 		}
 		// if no evidence and ends with newline, the last was empty string
 		res := strings.Join(newLines, "\n")
-		res = strings.Replace(res, "checks\t\n\n", "checks\t\n", -1)
-		os.WriteFile(f, []byte(res), 0644)
+		res = strings.ReplaceAll(res, "checks\t\n\n", "checks\t\n")
+		_ = os.WriteFile(f, []byte(res), 0644)
 		sum := sha256.Sum256([]byte(res))
 		digest := hex.EncodeToString(sum[:])
-		os.WriteFile(strings.TrimSuffix(f, ".preimage")+".digest", []byte(digest+"\n"), 0644)
+		_ = os.WriteFile(strings.TrimSuffix(f, ".preimage")+".digest", []byte(digest+"\n"), 0644)
 		fmt.Println("Updated", f, digest)
 	}
 }

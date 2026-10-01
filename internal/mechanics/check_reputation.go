@@ -352,6 +352,10 @@ func (c ReputationCheck) Run(_ context.Context, s *Subject) (Finding, error) {
 		"flags the issuer as malicious. Recorded as attributed evidence only: it " +
 		"does not lower the capability severity, because a named issuer holds the " +
 		"same power over your balance as an anonymous one." + listNote
+	if len(unrecognised) > 0 {
+		f.Reasoning += fmt.Sprintf(" The directory also carried tag(s) outside Assay's "+
+			"documented vocabulary, which were recorded but did not escalate: %q.", unrecognised)
+	}
 	return f, nil
 }
 

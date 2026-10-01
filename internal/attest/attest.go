@@ -130,6 +130,9 @@ var ErrUnevaluated = errors.New("attest: capability axis was never evaluated, so
 // ProvenanceStatus represents the result of evaluating scanner version binding.
 type ProvenanceStatus string
 
+// ProvenanceValid, ProvenanceInvalid and ProvenanceUnknown are the three
+// outcomes of evaluating a report's bound scanner version against the caller's
+// minimum.
 const (
 	ProvenanceValid   ProvenanceStatus = "valid"   // ProvenanceValid means the scanner version meets the caller's minimum.
 	ProvenanceInvalid ProvenanceStatus = "invalid" // Version below caller's minimum

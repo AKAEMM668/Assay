@@ -144,8 +144,6 @@ func TestV1AndV2BytesAreUnchangedByScannerBinding(t *testing.T) {
 // fixture is committed with this change; the write is only a fallback so the
 // test fails loudly rather than silently if the fixture is lost.
 func TestV3VectorIsCommitted(t *testing.T) {
-	const name = "scanner-bound-checkset-v3"
-
 	rep := scannerBoundReport(func(r *mechanics.Report) {
 		r.Evidence = []mechanics.Evidence{
 			{

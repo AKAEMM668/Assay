@@ -109,7 +109,7 @@ func defaultDeps() commandDeps {
 }
 
 func usage(w io.Writer) {
-	fmt.Fprint(w, `usage:
+	_, _ = fmt.Fprint(w, `usage:
   assay scan CODE-ISSUER          classify one asset and print the report as JSON
   assay attestation CODE-ISSUER   print the on-chain attest() arguments for one asset
   assay verify [-hash HEX] [-raw] [PREIMAGE]
@@ -321,7 +321,7 @@ func runHistory(args []string, d commandDeps) error {
 
 	if len(hist) == 0 {
 		msg := "assay history: no observations for " + asset.String()
-		fmt.Fprintln(d.stdout, msg)
+		_, _ = fmt.Fprintln(d.stdout, msg)
 		if *guarantee {
 			return fmt.Errorf("no history")
 		}
@@ -330,7 +330,7 @@ func runHistory(args []string, d commandDeps) error {
 
 	if *raw {
 		for _, h := range hist {
-			fmt.Fprintf(d.stdout, "%s\t%s\t%s\t%s\n", h.Asset, h.Severity, h.Transition, h.Reason)
+			_, _ = fmt.Fprintf(d.stdout, "%s\t%s\t%s\t%s\n", h.Asset, h.Severity, h.Transition, h.Reason)
 		}
 		return nil
 	}

@@ -69,7 +69,7 @@ func NetworkFor(baseURL string) (Network, error) {
 	}
 	u, err := url.Parse(baseURL)
 	if err != nil {
-		return "", fmt.Errorf("%w: %q: %v", ErrUnknownNetwork, baseURL, err)
+		return "", fmt.Errorf("%w: %q: %w", ErrUnknownNetwork, baseURL, err)
 	}
 	switch u.Hostname() {
 	case "horizon.stellar.org":
