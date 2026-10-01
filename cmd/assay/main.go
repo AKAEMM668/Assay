@@ -150,6 +150,8 @@ func runWith(args []string, d commandDeps) error {
 		return runAttestation(args[1:], d)
 	case "history":
 		return runHistory(args[1:], d)
+	case "verify":
+		return runVerify(args[1:])
 	case "serve":
 		return d.serve(args[1:], log)
 	default:
@@ -158,7 +160,7 @@ func runWith(args []string, d commandDeps) error {
 	}
 }
 
-func runScan(args []string) error {
+func runScan(args []string, d commandDeps) error {
 	fs := flag.NewFlagSet("scan", flag.ContinueOnError)
 	assetLists := assetListFlags(fs)
 	if err := fs.Parse(args); err != nil {
@@ -175,7 +177,7 @@ func runScan(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := newScanner(assetLists()).Scan(ctx, asset)
+	report, err := scanFuncFor(assetLists(), d)(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -183,6 +185,17 @@ func runScan(args []string) error {
 	enc := json.NewEncoder(d.stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(report)
+}
+
+// scanFuncFor returns the scan function the scanning subcommands use. When no
+// SEP-0042 list is configured it returns the injected dependency, so dispatch
+// tests never touch the network; when lists are named it wires a production
+// scanner configured to consult them.
+func scanFuncFor(lists []string, d commandDeps) func(context.Context, mechanics.Asset) (*mechanics.Report, error) {
+	if len(lists) == 0 {
+		return d.scan
+	}
+	return newScanner(lists).Scan
 }
 
 // assetListFlags registers the -asset-lists flag shared by every command that
@@ -254,7 +267,7 @@ func runAttestation(args []string, d commandDeps) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := newScanner(assetLists()).Scan(ctx, asset)
+	report, err := scanFuncFor(assetLists(), d)(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -299,7 +312,7 @@ func runHistory(args []string, d commandDeps) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	report, err := newScanner(assetLists()).Scan(ctx, asset)
+	report, err := scanFuncFor(assetLists(), d)(ctx, asset)
 	if err != nil {
 		return err
 	}
@@ -397,16 +410,10 @@ func runServe(args []string, log *slog.Logger) error {
 		return err
 	}
 
-	// The cache lives as long as the server process, which is where it earns
-	// its keep: repeated scans of the same issuer reuse an answer instead of
-	// re-reading a free service on every request.
-	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           api.NewServerWithScanner(scan.NewWithOptions(cache()), log).Handler(),
-	srv := api.NewServer(log)
 	// The server is where a list configuration matters most: every scan it
 	// serves consults the same configured lists, attributed the same way, and
 	// records them in the observation history like any other evidence.
+	srv := api.NewServer(log)
 	srv.Scanner = newScanner(assetLists())
 	if *historyPath != "" {
 		store, err := historystore.Open(*historyPath)
@@ -428,23 +435,6 @@ func runServe(args []string, log *slog.Logger) error {
 	defer stop()
 
 	errChan := make(chan error, 1)
-	go func() {
-		log.Info("assay listening", "addr", *addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			errChan <- err
-		}
-	}()
-
-	select {
-	case err := <-errChan:
-		return err
-	case <-ctx.Done():
-		log.Info("shutting down server gracefully")
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		return srv.Shutdown(shutdownCtx)
-	}
-errChan := make(chan error, 1)
 	go func() {
 		log.Info("assay listening", "addr", *addr, "history", *historyPath)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
