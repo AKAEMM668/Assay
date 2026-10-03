@@ -59,9 +59,7 @@ func serve(t *testing.T, status int, body string) *stellarexpert.Client {
 func serveSequence(t *testing.T, statuses []int, bodies []string) *stellarexpert.Client {
 	t.Helper()
 	seq := make([]int, len(statuses))
-	for i := range statuses {
-		seq[i] = statuses[i]
-	}
+	copy(seq, statuses)
 	bodiesSeq := append([]string{}, bodies...)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(seq) == 0 {
@@ -167,7 +165,7 @@ func TestRetry429Then200Succeeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Directory after retry: %v", err)
 	}
-	if entry == nil || entry.Name != "Zeam.Money" {
+	if entry.Value == nil || entry.Value.Name != "Zeam.Money" {
 		t.Fatalf("wanted the real entry, got %+v", entry)
 	}
 }
@@ -191,7 +189,7 @@ func TestRetry404IsNotRetried(t *testing.T) {
 	if err != nil {
 		t.Fatalf("404 was retried: %v", err)
 	}
-	if entry != nil {
+	if entry.Value != nil {
 		t.Fatalf("404 reported as a listing: %+v", entry)
 	}
 }
