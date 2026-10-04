@@ -88,18 +88,27 @@ func (a Asset) String() string { return a.Code + "-" + a.Issuer }
 // no code path that renders someone else's data as an Assay conclusion.
 type Evidence struct {
 	Source string `json:"source"`
-	URL    string `json:"url"`
-	Claim  string `json:"claim"`
-	// RetrievedAt is when this specific fact was observed from the source
-	// (or when the attempt was made, if the fetch failed).
+	// URL is the location the claim is attributed to. It keeps its original
+	// per-path meaning so that no attestation already on chain moves: on a
+	// successful fetch it is the FINAL location, after redirects; on a failed
+	// fetch it is the REQUESTED location, because no final document existed.
+	// RequestedURL carries the other half.
+	URL string `json:"url"`
+	// RequestedURL is the SEP-1 well-known location derived from home_domain —
+	// the URL Assay asked for. It is recorded alongside URL so an auditor can
+	// see whether a claim came from the requested host or from somewhere a
+	// redirect moved it to, which URL alone cannot express. On a failed fetch
+	// it equals URL (the request never produced a final location).
 	//
-	// Clock source: scanner host wall clock (time.Now().UTC()).
-	// Precision: nanoseconds in memory (time.Time), formatted as RFC 3339 in JSON.
-	//
-	// When a fetch fails, RetrievedAt carries the attempt time, Attempted is
-	// true, and Claim reads "not retrievable: <reason>". An absent retrieval
-	// time is never represented as a zero timestamp. See docs/timestamps.md.
-	RetrievedAt time.Time `json:"retrieved_at"`
+	// It is deliberately OUTSIDE the evidence_hash preimage, which renders only
+	// Source/URL/Claim: adding it must not change the hash of a report whose
+	// claim did not change, or every existing attestation would stop
+	// reproducing. A future encoding may bind it; that would be a version bump.
+	RequestedURL string `json:"requested_url,omitempty"`
+	Claim        string `json:"claim"`
+	// RetrievedAt marshals through the canonical whole-second UTC wire format
+	// (issue #52), not time.Time's default RFC3339Nano.
+	RetrievedAt CanonicalTime `json:"retrieved_at"`
 	// Attempted marks evidence whose RetrievedAt is the time the fetch was
 	// ATTEMPTED, not the time the source answered: the fetch failed, so there
 	// is no completion time to record. The Claim of such evidence always reads
@@ -325,47 +334,6 @@ type AssetListSignal struct {
 	Err string
 }
 
-// AssetListSignal is one configured SEP-0042 list's result for the asset under
-// scan, attributed to the list that published it: its own name, its own URL and
-// its own retrieval time, never merged with another source's answer.
-//
-// It is evidence only. SEP-0042 states that "inclusion of any particular asset
-// in a list should not be considered as endorsement or recommendation of any
-// kind", so presence never moves severity in either direction — see
-// docs/severity-model.md: severity is capability-only, and absence from a list
-// is not an observation at all.
-type AssetListSignal struct {
-	// Name and Provider are the list's own self-description, and identify the
-	// source in the report. Both are empty when the list could not be read, in
-	// which case only URL identifies it.
-	Name     string
-	Provider string
-	// URL is where the list was fetched from, so the reader can re-fetch
-	// exactly what was read.
-	URL string
-	// Version and Network are recorded as published and are not checked
-	// against the ledger.
-	Version string
-	Network string
-
-	// Entry is the list's own entry for this asset, populated only when a match
-	// was found in a list that was actually read.
-	Entry *assetlist.Asset
-	// Listed is meaningful only when Err is empty: a list that could not be
-	// read gave no answer, and no answer must never render as absence.
-	Listed bool
-
-	// FetchedAt is when this list was retrieved — the time of the fetch, not
-	// the time of the scan.
-	FetchedAt time.Time
-	// AttemptedAt is when the list was asked. Always set, so failure evidence
-	// always has a time to carry.
-	AttemptedAt time.Time
-	// Err records why the list could not be read, verbatim. Empty means it was
-	// read.
-	Err string
-}
-
 // ReportSchemaVersion is the current value Report.SchemaVersion marshals as
 // (issue #44). Bump it on any breaking change to the report JSON shape; see
 // the compatibility rule on the field.
@@ -505,7 +473,6 @@ type Report struct {
 	MechanicNames []string   `json:"mechanics"`
 	Findings      []Finding  `json:"findings"`
 	Evidence      []Evidence `json:"evidence"`
-	ScannedAt     time.Time  `json:"scanned_at"`
 
 	// ObservationWindowStart is the start of the observation window for this report.
 	ObservationWindowStart time.Time `json:"observation_window_start,omitempty"`
@@ -521,7 +488,7 @@ type Report struct {
 	// timeout of up to 30 seconds, ScannedAt is an approximation across the
 	// sequential fetch window; individual Evidence items carry their own
 	// RetrievedAt completion times. See docs/timestamps.md.
-	ScannedAt time.Time `json:"scanned_at"`
+	ScannedAt CanonicalTime `json:"scanned_at"`
 }
 
 // Engine runs a set of checks over a Subject.
@@ -582,21 +549,22 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 		scannedAt = s.FetchedAt
 	}
 	rep := &Report{
-		SchemaVersion:      ReportSchemaVersion,
-		Asset:              s.Asset,
-		Accountability:     AccountabilityUnknown,
-		ScannedAt:          CanonicalTime(scannedAt),
-		CheckSet:           e.CheckIDs(),
-		Findings:           []Finding{},
-		Evidence:           []Evidence{},
-		UndeterminedChecks: []string{},
+		SchemaVersion:        ReportSchemaVersion,
+		Asset:                s.Asset,
+		Accountability:       AccountabilityUnknown,
+		ScannedAt:            CanonicalTime(scannedAt),
+		Network:              s.Network,
+		CheckSet:             e.CheckIDs(),
+		Findings:             []Finding{},
+		Evidence:             []Evidence{},
+		UndeterminedChecks:   []string{},
+		UndeterminedBySource: make(map[string]int),
 	}
 
 	totalChecks := len(e.Checks)
 	undeterminedCount := 0
 
 	for _, c := range e.Checks {
-		rep.Checks = append(rep.Checks, c.ID())
 		f, err := c.Run(ctx, s)
 		if err != nil {
 			return nil, fmt.Errorf("check %s: %w", c.ID(), err)
@@ -673,7 +641,7 @@ func (e *Engine) Run(ctx context.Context, s *Subject) (*Report, error) {
 	sort.SliceStable(rep.Findings, func(i, j int) bool {
 		return rep.Findings[i].Severity > rep.Findings[j].Severity
 	})
-	sort.Strings(rep.Checks)
+	sort.Strings(rep.CheckSet)
 	return rep, nil
 }
 
