@@ -218,6 +218,7 @@ func Corpus() []Label {
 				"not unverified, and severity must stay clear (#3)",
 			Base:           mechanics.Clear,
 			Severity:       mechanics.Clear,
+			Undetermined:   true,
 			Accountability: mechanics.AccountabilityUnknown,
 			Checks: map[string]CheckLabel{
 				"capability": {Severity: mechanics.Clear},

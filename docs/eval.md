@@ -48,7 +48,7 @@ row on each test run, so the table cannot drift from the code without a red test
 | berkshire-clawback-scam | `BERKSHIRE` | high | **critical** | true | false | unverified | `auth_revocable`, `auth_clawback_enabled`, `domain_unverified`, `blocklisted` |
 | doge-noflags-scam | `DOGE` | clear | **critical** | true | false | unverified | `domain_unverified`, `blocklisted` |
 | doge-reputation-outage | `DOGE` | clear | **clear** | false | **true** | unverified | `domain_unverified` |
-| velo-no-home-domain | `VELO` | clear | **clear** | false | false | unknown | `domain_unverified` |
+| velo-no-home-domain | `VELO` | clear | **clear** | false | **true** | unknown | `domain_unverified` |
 
 The `doge-reputation-outage` row is the point of the `Undetermined` column: its
 severity is the capability floor, exactly as if nothing were wrong, and the
@@ -180,7 +180,10 @@ Accountability records it as `unknown`, never `unverified`, because
 It is also the proof that the distinction does not buy a severity discount in
 disguise: identical flags to `aqua-clear-verified`, identical `clear` result.
 The `domain_unverified` bit still appears, because no identity was published
-to verify against. This subject is the fixture for issue #3.
+to verify against. With no `home_domain` there is no domain to key the blocklist
+on, so the reputation question cannot be put at all and the report is
+`undetermined: true` — a floor, not an answer. This subject is the fixture for
+issue #3.
 
 ## Per-check evaluation
 
@@ -208,16 +211,17 @@ Measured per-check output (same fixtures as the table above):
 | berkshire-clawback-scam | high, `auth_revocable`, `auth_clawback_enabled` | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-noflags-scam | clear | clear | unverified, `domain_unverified` | critical, `blocklisted` |
 | doge-reputation-outage | clear | clear | unverified, `domain_unverified` | **undetermined** |
-| velo-no-home-domain | clear | clear | unknown, `domain_unverified` | clear (escalation axis) |
+| velo-no-home-domain | clear | clear | unknown, `domain_unverified` | **undetermined** |
 
 The `reputation` column carries the escalation axis: its finding is `clear` with
 `escalation: true` when nothing is flagged, and `critical` with `blocklisted`
 when it is. That is the one check permitted to escalate, and per-check labels
-keep it from hiding a capability error. For a degraded subject
-(`synthetic-reputation-outage`, `doge-reputation-outage`) the reputation cell is
-**undetermined**: the source was consulted and failed, so the finding makes no
-severity claim at all — it is compared against its `Undetermined` label, not
-against a level.
+keep it from hiding a capability error. For a subject where reputation cannot be
+put — a degraded one (`synthetic-reputation-outage`, `doge-reputation-outage`),
+where the source was consulted and failed, or `velo-no-home-domain`, where there
+is no domain to key the lookup on — the reputation cell is **undetermined**: the
+finding makes no severity claim at all, so it is compared against its
+`Undetermined` label, not against a level.
 
 ### synthetic-reputation-outage — the degraded scan
 
